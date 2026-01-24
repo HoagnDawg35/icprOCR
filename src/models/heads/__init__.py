@@ -1,0 +1,1 @@
+from src.models.heads.ctc_head import CTCHead

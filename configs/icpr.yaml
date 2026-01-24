@@ -1,0 +1,48 @@
+# Training Configuration
+
+# Experiment tracking
+model_type: "restran"  # 
+experiment_name: "restran" 
+augmentation_level: "full"  
+use_stn: true  # Enable Spatial Transformer Network
+
+# Data paths
+data_root: "data/train"
+test_data_root: "data/test"
+val_split_file: "data/val_tracks.json"
+submission_file: "submission.txt"
+
+# Image dimensions
+img_height: 32
+img_width: 128
+num_frames: 5
+# Character set
+chars: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# Training hyperparameters
+batch_size: 64
+learning_rate: 0.0005
+epochs: 30
+seed: 42
+num_workers: 10
+weight_decay: 0.0001
+grad_clip: 5.0
+split_ratio: 0.9
+use_cudnn_benchmark: false
+
+# CRNN model hyperparameters
+hidden_size: 256
+rnn_dropout: 0.25
+
+# ResTranOCR model hyperparameters
+transformer_heads: 8
+transformer_layers: 3
+transformer_ff_dim: 2048
+transformer_dropout: 0.1
+ctc_head:
+  mid_channels: 1024        
+  dropout: 0.1
+  return_feats: false
+
+# Output directory
+output_dir: "results"

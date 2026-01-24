@@ -1,0 +1,1 @@
+from src.models.backbones.resnet34 import ResNetFeatureExtractor
