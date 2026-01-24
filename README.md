@@ -1,4 +1,4 @@
-# LP-Diff-UTEAI OCR Demo
+# ICPR 2026 OCR
 
 For training:
 `python train.py --mode train --use-validation`
