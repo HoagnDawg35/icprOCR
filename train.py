@@ -471,7 +471,7 @@ def main():
     print(f"EPOCHS          : {config.epochs}")
     print(f"BATCH_SIZE      : {config.batch_size}")
     print(f"LEARNING_RATE   : {config.learning_rate}")
-    print(f"DEVICE          : {config.device}")
+    print(f"🚀 DEVICE        : {config.device}")
     print(f"CHECKPOINT      : {args.checkpoint if args.checkpoint else 'None'}")
     print(f"OUTPUT_DIR      : {config.OUTPUT_DIR}")
     

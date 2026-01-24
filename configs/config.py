@@ -98,7 +98,7 @@ def load_config_from_yaml(yaml_path: str) -> Config:
         config_dict['ctc_head'] = CTCHeadConfig(**config_dict['ctc_head'])
 
     # Handle device separately since it needs special treatment
-    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Remove device from dict if present (we'll set it explicitly)
     config_dict.pop('device', None)

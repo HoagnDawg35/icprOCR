@@ -30,6 +30,7 @@ class Trainer:
         self.config = config
         self.idx2char = idx2char
         self.device = config.device
+        print(f"✅ Using device: {self.device}")
         
         seed_everything(config.seed, benchmark=getattr(config, 'use_cudnn_benchmark', False))
         
