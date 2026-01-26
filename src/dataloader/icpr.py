@@ -38,6 +38,7 @@ class ICPR_LPR_Datatset(Dataset):
         is_test: bool = False,
         full_train: bool = False,
         num_frames: int = 5,
+        train_hr_only: bool = False,
     ):
         """
         Args:
@@ -52,6 +53,8 @@ class ICPR_LPR_Datatset(Dataset):
             augmentation_level: 'full' or 'light' augmentation for training.
             is_test: If True, load test data without labels (for submission).
             full_train: If True, use all tracks for training (no val split).
+            num_frames: Number of frames to sample.
+            train_hr_only: If True, only use HR (synthetic) images for training.
         """
         self.mode = mode
         self.samples: List[Dict[str, Any]] = []
@@ -64,6 +67,7 @@ class ICPR_LPR_Datatset(Dataset):
         self.is_test = is_test
         self.full_train = full_train
         self.num_frames = num_frames
+        self.train_hr_only = train_hr_only
         if mode == 'train':
             # Training: apply augmentation on the fly
             if augmentation_level == "light":
@@ -189,12 +193,13 @@ class ICPR_LPR_Datatset(Dataset):
                 )
                 
                 # Real LR samples
-                self.samples.append({
-                    'paths': lr_files,
-                    'label': label,
-                    'is_synthetic': False,
-                    'track_id': track_id
-                })
+                if not (self.mode == 'train' and self.train_hr_only):
+                    self.samples.append({
+                        'paths': lr_files,
+                        'label': label,
+                        'is_synthetic': False,
+                        'track_id': track_id
+                    })
                 
                 # Synthetic LR samples (only in training mode)
                 if self.mode == 'train':

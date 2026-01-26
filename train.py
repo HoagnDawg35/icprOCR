@@ -94,6 +94,12 @@ def parse_args() -> argparse.Namespace:
     
     # ========== MODEL CONFIG ==========
     parser.add_argument(
+        "--hr-only",
+        action="store_true",
+        help="Train only on HR images (synthetic LR)"
+    )
+    
+    parser.add_argument(
         "--no-stn",
         action="store_true",
         help="Disable Spatial Transformer Network"
@@ -238,6 +244,7 @@ def mode_train(args, config):
         'seed': config.seed,
         'augmentation_level': config.augmentation_level,
         'num_frames': config.num_frames,
+        'train_hr_only': getattr(args, 'hr_only', False),
     }
     
     # Create datasets
