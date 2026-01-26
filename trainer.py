@@ -76,16 +76,95 @@ class Trainer:
     def _get_exp_name(self) -> str:
         return getattr(self.config, 'experiment_name', 'baseline')
 
+    # def train_one_epoch(self) -> float:
+    #     self.model.train()
+    #     epoch_loss = 0.0
+    #     pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}/{self.config.epochs}")
+        
+    #     for batch in pbar:
+    #         if self.teacher_model and len(batch) == 6:
+    #             lr_images, hr_images, targets, target_lengths, _, _ = batch
+    #             # print(f"DEBUG: lr_images {lr_images.shape}, hr_images {hr_images.shape}, targets {targets.shape}")
+    #             lr_images = lr_images.to(self.device).contiguous()
+    #             hr_images = hr_images.to(self.device).contiguous()
+    #             targets = targets.to(self.device)
+                
+    #             self.optimizer.zero_grad(set_to_none=True)
+                
+    #             with autocast('cuda'):
+    #                 # Teacher features from HR images
+    #                 with torch.no_grad():
+    #                     teacher_feats, _ = self.teacher_model(hr_images, return_feats=True)
+                    
+    #                 # Student features and logits from LR images
+    #                 student_feats, preds = self.model(lr_images, return_feats=True)
+    #                 # print(f"DEBUG: teacher_feats {teacher_feats.shape}, student_feats {student_feats.shape}, preds {preds.shape}")
+                    
+    #                 # CTC Loss
+    #                 preds_permuted = preds.permute(1, 0, 2)
+    #                 input_lengths = torch.full(
+    #                     size=(lr_images.size(0),),
+    #                     fill_value=preds.size(1),
+    #                     dtype=torch.long
+    #                 )
+    #                 ctc_loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
+                    
+    #                 # Contrastive Loss (MSE between features)
+    #                 contrastive_loss = self.contrastive_criterion(student_feats, teacher_feats)
+                    
+    #                 # Combined Loss
+    #                 lambda_con = getattr(self.config, 'lambda_contrastive', 1.0)
+    #                 loss = ctc_loss + lambda_con * contrastive_loss
+    #         else:
+    #             images, targets, target_lengths, _, _ = batch
+    #             images = images.to(self.device)
+    #             targets = targets.to(self.device)
+                
+    #             self.optimizer.zero_grad(set_to_none=True)
+                
+    #             with autocast('cuda'):
+    #                 preds = self.model(images)
+    #                 preds_permuted = preds.permute(1, 0, 2)
+    #                 input_lengths = torch.full(
+    #                     size=(images.size(0),),
+    #                     fill_value=preds.size(1),
+    #                     dtype=torch.long
+    #                 )
+    #                 loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
+
+    #         self.scaler.scale(loss).backward()
+    #         self.scaler.unscale_(self.optimizer)
+    #         torch.nn.utils.clip_grad_norm_(self.model.parameters(), getattr(self.config, 'grad_clip', 10.0))
+            
+    #         scale_before = self.scaler.get_scale()
+    #         self.scaler.step(self.optimizer)
+    #         self.scaler.update()
+            
+    #         if self.scaler.get_scale() >= scale_before:
+    #             self.scheduler.step()
+            
+    #         epoch_loss += loss.item() * images.size(0)  # better averaging
+    #         pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{self.scheduler.get_last_lr()[0]:.2e}")
+        
+    #     return epoch_loss / len(self.train_loader.dataset)  # per sample
+
     def train_one_epoch(self) -> float:
         self.model.train()
         epoch_loss = 0.0
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}/{self.config.epochs}")
         
         for batch in pbar:
-            if self.teacher_model and len(batch) == 6:
+            # Detect if batch has HR images (teacher-student mode)
+            has_hr_images = self.teacher_model and len(batch) == 6
+            
+            if has_hr_images:
                 lr_images, hr_images, targets, target_lengths, _, _ = batch
-                lr_images = lr_images.to(self.device)
-                hr_images = hr_images.to(self.device)
+                # lr_images, hr_images: [B, num_frames, C, H, W]
+                B, T, C, H, W = lr_images.shape
+                
+                # Reshape to [B*T, C, H, W] for model processing
+                lr_images = lr_images.view(B * T, C, H, W).to(self.device)
+                hr_images = hr_images.view(B * T, C, H, W).to(self.device)
                 targets = targets.to(self.device)
                 
                 self.optimizer.zero_grad(set_to_none=True)
@@ -98,10 +177,18 @@ class Trainer:
                     # Student features and logits from LR images
                     student_feats, preds = self.model(lr_images, return_feats=True)
                     
+                    # Reshape predictions: [B*T, seq_len, num_classes] -> [B, T, seq_len, num_classes]
+                    preds = preds.view(B, T, preds.size(1), preds.size(2))
+                    preds = preds.mean(dim=1)  # Average across frames: [B, seq_len, num_classes]
+                    
+                    # Average features across frames
+                    teacher_feats = teacher_feats.view(B, T, -1).mean(dim=1)  # [B, feat_dim]
+                    student_feats = student_feats.view(B, T, -1).mean(dim=1)  # [B, feat_dim]
+                    
                     # CTC Loss
                     preds_permuted = preds.permute(1, 0, 2)
                     input_lengths = torch.full(
-                        size=(lr_images.size(0),),
+                        size=(B,),
                         fill_value=preds.size(1),
                         dtype=torch.long
                     )
@@ -113,22 +200,37 @@ class Trainer:
                     # Combined Loss
                     lambda_con = getattr(self.config, 'lambda_contrastive', 1.0)
                     loss = ctc_loss + lambda_con * contrastive_loss
+                
+                # Use B for proper averaging
+                current_batch_size = B
+                
             else:
                 images, targets, target_lengths, _, _ = batch
-                images = images.to(self.device)
+                # images: [B, num_frames, C, H, W]
+                B, T, C, H, W = images.shape
+                
+                # Reshape to [B*T, C, H, W]
+                images = images.view(B * T, C, H, W).to(self.device)
                 targets = targets.to(self.device)
                 
                 self.optimizer.zero_grad(set_to_none=True)
                 
                 with autocast('cuda'):
                     preds = self.model(images)
+                    
+                    # Reshape and average across frames
+                    preds = preds.view(B, T, preds.size(1), preds.size(2))
+                    preds = preds.mean(dim=1)  # [B, seq_len, num_classes]
+                    
                     preds_permuted = preds.permute(1, 0, 2)
                     input_lengths = torch.full(
-                        size=(images.size(0),),
+                        size=(B,),
                         fill_value=preds.size(1),
                         dtype=torch.long
                     )
                     loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
+                
+                current_batch_size = B
 
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
@@ -141,10 +243,10 @@ class Trainer:
             if self.scaler.get_scale() >= scale_before:
                 self.scheduler.step()
             
-            epoch_loss += loss.item() * images.size(0)  # better averaging
+            epoch_loss += loss.item() * current_batch_size
             pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{self.scheduler.get_last_lr()[0]:.2e}")
         
-        return epoch_loss / len(self.train_loader.dataset)  # per sample
+        return epoch_loss / len(self.train_loader.dataset)
 
     def validate(self) -> Tuple[Dict[str, float], List[str]]:
         """Run validation and generate submission data."""

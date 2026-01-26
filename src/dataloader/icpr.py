@@ -313,10 +313,14 @@ class ICPR_LPR_Datatset(Dataset):
         """Custom collate function for DataLoader."""
         if len(batch[0]) == 6: # HR Guided mode
             lr_images, hr_images, targets, target_lengths, labels_text, track_ids = zip(*batch)
-            lr_images = torch.stack(lr_images, 0)
-            hr_images = torch.stack(hr_images, 0)
-            targets = torch.cat(targets)
-            target_lengths = torch.tensor(target_lengths, dtype=torch.long)
+            # lr_images = torch.stack(lr_images, 0)
+            # hr_images = torch.stack(hr_images, 0)
+            # targets = torch.cat(targets)
+            # target_lengths = torch.tensor(target_lengths, dtype=torch.long)
+            lr_images = torch.stack(lr_images_list, dim=0)  # [B, T, C, H, W]
+            hr_images = torch.stack(hr_images_list, dim=0)  # [B, T, C, H, W]
+            targets = torch.cat(targets_list, dim=0)        # [total_seq_len]
+            target_lengths = torch.stack(target_lengths_list, dim=0)  # [B]
             return lr_images, hr_images, targets, target_lengths, labels_text, track_ids
         else:
             images, targets, target_lengths, labels_text, track_ids = zip(*batch)

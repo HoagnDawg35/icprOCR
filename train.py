@@ -367,7 +367,7 @@ def mode_train(args, config):
     print(f"Training: Epoch {start_epoch+1}/{config.epochs}")
     print("="*70)
     
-    trainer.fit(start_epoch=start_epoch, best_acc=best_acc)
+    # trainer.fit(start_epoch=start_epoch, best_acc=best_acc)
     
     print("\n✅ Training completed!")
 
