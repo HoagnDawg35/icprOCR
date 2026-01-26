@@ -39,6 +39,7 @@ class ICPR_LPR_Datatset(Dataset):
         full_train: bool = False,
         num_frames: int = 5,
         train_hr_only: bool = False,
+        hr_guided: bool = False,
     ):
         """
         Args:
@@ -55,6 +56,7 @@ class ICPR_LPR_Datatset(Dataset):
             full_train: If True, use all tracks for training (no val split).
             num_frames: Number of frames to sample.
             train_hr_only: If True, only use HR (synthetic) images for training.
+            hr_guided: If True, return both LR and HR images for guided training.
         """
         self.mode = mode
         self.samples: List[Dict[str, Any]] = []
@@ -68,6 +70,7 @@ class ICPR_LPR_Datatset(Dataset):
         self.full_train = full_train
         self.num_frames = num_frames
         self.train_hr_only = train_hr_only
+        self.hr_guided = hr_guided
         if mode == 'train':
             # Training: apply augmentation on the fly
             if augmentation_level == "light":
@@ -202,12 +205,22 @@ class ICPR_LPR_Datatset(Dataset):
                     })
                 
                 # Synthetic LR samples (only in training mode)
-                if self.mode == 'train':
+                if self.mode == 'train' and not self.hr_guided:
                     self.samples.append({
                         'paths': hr_files,
                         'label': label,
                         'is_synthetic': True,
                         'track_id': track_id
+                    })
+                
+                # HR Guided training: return both LR and HR
+                if self.mode == 'train' and self.hr_guided:
+                    self.samples.append({
+                        'lr_paths': lr_files,
+                        'hr_paths': hr_files,
+                        'label': label,
+                        'track_id': track_id,
+                        'is_guided': True
                     })
             except Exception:
                 pass
@@ -234,40 +247,32 @@ class ICPR_LPR_Datatset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int, str, str]:
-        """Load exactly 5 frames (guaranteed by dataset structure).
+    def __getitem__(self, idx: int) -> Tuple:
+        """Load images. 
         
-        For training: applies degradation (if synthetic) then augmentation.
-        For validation: applies degradation (if synthetic) then clean transform.
-        For test: only applies clean transform, returns dummy targets.
+        If hr_guided=True, returns (lr_images, hr_images, target, target_len, label, track_id)
+        Else returns (images, target, target_len, label, track_id)
         """
         item = self.samples[idx]
+        is_guided = item.get('is_guided', False)
+        
+        if is_guided:
+            lr_images = self._load_sequence(item['lr_paths'], augment=True, degrade=False)
+            hr_images = self._load_sequence(item['hr_paths'], augment=True, degrade=True) # HR images degraded to synthetic LR
+            
+            label = item['label']
+            target = [self.char2idx[c] for c in label if c in self.char2idx]
+            if len(target) == 0: target = [0]
+            
+            return lr_images, hr_images, torch.tensor(target, dtype=torch.long), len(target), label, item['track_id']
+        
+        # Standard loading (legacy)
         img_paths = item['paths']
         label = item['label']
         is_synthetic = item['is_synthetic']
         track_id = item['track_id']
-        if len(img_paths) >= self.num_frames:
-            # Sample evenly if we have more frames than needed
-            indices = torch.linspace(0, len(img_paths)-1, self.num_frames).long()
-            selected_paths = [img_paths[i] for i in indices]
-        else:
-            # Repeat last frame if we have fewer frames
-            selected_paths = img_paths + [img_paths[-1]] * (self.num_frames - len(img_paths))
         
-        images_list = []
-        for p in selected_paths:
-            image = cv2.imread(p, cv2.IMREAD_COLOR)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            
-            # Apply degradation first (if synthetic), before any transform
-            if is_synthetic and self.degrade:
-                image = self.degrade(image=image)['image']
-            
-            # Apply transform (augmented for training, clean for validation/test)
-            image = self.transform(image=image)['image']
-            images_list.append(image)
-
-        images_tensor = torch.stack(images_list, dim=0)
+        images_tensor = self._load_sequence(img_paths, augment=(self.mode == 'train'), degrade=is_synthetic)
         
         # Handle test mode (no labels)
         if self.is_test:
@@ -281,11 +286,41 @@ class ICPR_LPR_Datatset(Dataset):
             
         return images_tensor, torch.tensor(target, dtype=torch.long), target_len, label, track_id
 
+    def _load_sequence(self, img_paths: List[str], augment: bool = False, degrade: bool = False) -> torch.Tensor:
+        """Helper to load and preprocess a sequence of images."""
+        if len(img_paths) >= self.num_frames:
+            indices = torch.linspace(0, len(img_paths)-1, self.num_frames).long()
+            selected_paths = [img_paths[i] for i in indices]
+        else:
+            selected_paths = img_paths + [img_paths[-1]] * (self.num_frames - len(img_paths))
+        
+        images_list = []
+        for p in selected_paths:
+            image = cv2.imread(p, cv2.IMREAD_COLOR)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            if degrade and self.degrade:
+                image = self.degrade(image=image)['image']
+            
+            transform = self.transform if augment else get_val_transforms(self.img_height, self.img_width)
+            image = transform(image=image)['image']
+            images_list.append(image)
+
+        return torch.stack(images_list, dim=0)
+
     @staticmethod
-    def collate_fn(batch: List[Tuple]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple[str, ...], Tuple[str, ...]]:
+    def collate_fn(batch: List[Tuple]) -> Tuple:
         """Custom collate function for DataLoader."""
-        images, targets, target_lengths, labels_text, track_ids = zip(*batch)
-        images = torch.stack(images, 0)
-        targets = torch.cat(targets)
-        target_lengths = torch.tensor(target_lengths, dtype=torch.long)
-        return images, targets, target_lengths, labels_text, track_ids
+        if len(batch[0]) == 6: # HR Guided mode
+            lr_images, hr_images, targets, target_lengths, labels_text, track_ids = zip(*batch)
+            lr_images = torch.stack(lr_images, 0)
+            hr_images = torch.stack(hr_images, 0)
+            targets = torch.cat(targets)
+            target_lengths = torch.tensor(target_lengths, dtype=torch.long)
+            return lr_images, hr_images, targets, target_lengths, labels_text, track_ids
+        else:
+            images, targets, target_lengths, labels_text, track_ids = zip(*batch)
+            images = torch.stack(images, 0)
+            targets = torch.cat(targets)
+            target_lengths = torch.tensor(target_lengths, dtype=torch.long)
+            return images, targets, target_lengths, labels_text, track_ids

@@ -100,6 +100,19 @@ def parse_args() -> argparse.Namespace:
     )
     
     parser.add_argument(
+        "--hr-guided",
+        action="store_true",
+        help="Train on LR images with HR guidance (Contrastive Loss)"
+    )
+    
+    parser.add_argument(
+        "--teacher-checkpoint",
+        type=str,
+        default=None,
+        help="Path to HR-pretrained teacher checkpoint"
+    )
+
+    parser.add_argument(
         "--no-stn",
         action="store_true",
         help="Disable Spatial Transformer Network"
@@ -245,6 +258,7 @@ def mode_train(args, config):
         'augmentation_level': config.augmentation_level,
         'num_frames': config.num_frames,
         'train_hr_only': getattr(args, 'hr_only', False),
+        'hr_guided': getattr(args, 'hr_guided', False),
     }
     
     # Create datasets
@@ -310,7 +324,8 @@ def mode_train(args, config):
         train_loader=train_loader,
         val_loader=val_loader,
         config=config,
-        idx2char=config.idx2char
+        idx2char=config.idx2char,
+        teacher_model=load_teacher_model(args, config) if args.hr_guided else None
     )
     
     # Load checkpoint if resuming
@@ -355,6 +370,23 @@ def mode_train(args, config):
     trainer.fit(start_epoch=start_epoch, best_acc=best_acc)
     
     print("\n✅ Training completed!")
+
+
+def load_teacher_model(args, config):
+    """Load and freeze teacher model for guided training."""
+    checkpoint_path = args.teacher_checkpoint or args.checkpoint
+    if not checkpoint_path:
+        print("⚠️ WARNING: Guided training requested but no teacher checkpoint provided.")
+        return None
+        
+    print(f"\n👩‍🏫 Initializing Teacher Model from: {checkpoint_path}")
+    teacher = load_model(config)
+    load_checkpoint(checkpoint_path, teacher, config)
+    
+    for param in teacher.parameters():
+        param.requires_grad = False
+    teacher.eval()
+    return teacher
 
 
 def mode_infer(args, config):

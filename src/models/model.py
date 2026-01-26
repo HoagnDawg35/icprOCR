@@ -63,17 +63,18 @@ class ResTranOCR(nn.Module):
 
         # 6. Upsampler
         self.upsampler = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.Conv2d(3, 16, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_feats: bool = False) -> torch.Tensor:
         """
         Args:
             x: [Batch, Frames, 3, H, W]
+            return_feats: If True, return (features, logits)
         Returns:
-            Logits: [Batch, Seq_Len, Num_Classes]
+            Logits: [Batch, Seq_Len, Num_Classes] (or (features, logits) if return_feats=True)
         """
         b, f, c, h, w = x.size()
         assert f == self.num_frames, f"Expected {self.num_frames} frames, got {f}"

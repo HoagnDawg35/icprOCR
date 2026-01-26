@@ -22,9 +22,17 @@ class Trainer:
         val_loader: Optional[DataLoader],
         config,
         idx2char: Dict[int, str],
-        mode: str = 'train'
+        mode: str = 'train',
+        teacher_model: Optional[nn.Module] = None
     ):
         self.model = model
+        self.teacher_model = teacher_model
+        if self.teacher_model:
+            self.teacher_model.eval()
+            for p in self.teacher_model.parameters():
+                p.requires_grad = False
+            print("   ✅ Teacher model initialized and frozen")
+        
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.config = config
@@ -38,6 +46,7 @@ class Trainer:
             self._init_training_components()
     def _init_training_components(self):
         self.criterion = nn.CTCLoss(blank=0, zero_infinity=True)
+        self.contrastive_criterion = nn.MSELoss()
 
         self.optimizer = optim.AdamW(
             self.model.parameters(),
@@ -72,21 +81,54 @@ class Trainer:
         epoch_loss = 0.0
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}/{self.config.epochs}")
         
-        for images, targets, target_lengths, _, _ in pbar:
-            images = images.to(self.device)
-            targets = targets.to(self.device)
-            
-            self.optimizer.zero_grad(set_to_none=True)
-            
-            with autocast('cuda'):
-                preds = self.model(images)
-                preds_permuted = preds.permute(1, 0, 2)
-                input_lengths = torch.full(
-                    size=(images.size(0),),
-                    fill_value=preds.size(1),
-                    dtype=torch.long
-                )
-                loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
+        for batch in pbar:
+            if self.teacher_model and len(batch) == 6:
+                lr_images, hr_images, targets, target_lengths, _, _ = batch
+                lr_images = lr_images.to(self.device)
+                hr_images = hr_images.to(self.device)
+                targets = targets.to(self.device)
+                
+                self.optimizer.zero_grad(set_to_none=True)
+                
+                with autocast('cuda'):
+                    # Teacher features from HR images
+                    with torch.no_grad():
+                        teacher_feats, _ = self.teacher_model(hr_images, return_feats=True)
+                    
+                    # Student features and logits from LR images
+                    student_feats, preds = self.model(lr_images, return_feats=True)
+                    
+                    # CTC Loss
+                    preds_permuted = preds.permute(1, 0, 2)
+                    input_lengths = torch.full(
+                        size=(lr_images.size(0),),
+                        fill_value=preds.size(1),
+                        dtype=torch.long
+                    )
+                    ctc_loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
+                    
+                    # Contrastive Loss (MSE between features)
+                    contrastive_loss = self.contrastive_criterion(student_feats, teacher_feats)
+                    
+                    # Combined Loss
+                    lambda_con = getattr(self.config, 'lambda_contrastive', 1.0)
+                    loss = ctc_loss + lambda_con * contrastive_loss
+            else:
+                images, targets, target_lengths, _, _ = batch
+                images = images.to(self.device)
+                targets = targets.to(self.device)
+                
+                self.optimizer.zero_grad(set_to_none=True)
+                
+                with autocast('cuda'):
+                    preds = self.model(images)
+                    preds_permuted = preds.permute(1, 0, 2)
+                    input_lengths = torch.full(
+                        size=(images.size(0),),
+                        fill_value=preds.size(1),
+                        dtype=torch.long
+                    )
+                    loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
 
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
