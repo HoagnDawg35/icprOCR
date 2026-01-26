@@ -196,7 +196,7 @@ class ICPR_LPR_Datatset(Dataset):
                 )
                 
                 # Real LR samples
-                if not (self.mode == 'train' and self.train_hr_only):
+                if not (self.mode == 'train' and (self.train_hr_only or self.hr_guided)):
                     self.samples.append({
                         'paths': lr_files,
                         'label': label,
@@ -313,18 +313,15 @@ class ICPR_LPR_Datatset(Dataset):
         """Custom collate function for DataLoader."""
         if len(batch[0]) == 6: # HR Guided mode
             lr_images, hr_images, targets, target_lengths, labels_text, track_ids = zip(*batch)
-            # lr_images = torch.stack(lr_images, 0)
-            # hr_images = torch.stack(hr_images, 0)
-            # targets = torch.cat(targets)
-            # target_lengths = torch.tensor(target_lengths, dtype=torch.long)
-            lr_images = torch.stack(lr_images_list, dim=0)  # [B, T, C, H, W]
-            hr_images = torch.stack(hr_images_list, dim=0)  # [B, T, C, H, W]
-            targets = torch.cat(targets_list, dim=0)        # [total_seq_len]
-            target_lengths = torch.stack(target_lengths_list, dim=0)  # [B]
+            lr_images = torch.stack(lr_images, dim=0)      # [B, T, C, H, W]
+            hr_images = torch.stack(hr_images, dim=0)      # [B, T, C, H, W]
+            targets = torch.cat(targets, dim=0)            # [total_seq_len]
+            target_lengths = torch.tensor(target_lengths, dtype=torch.long)  # [B]
+            
             return lr_images, hr_images, targets, target_lengths, labels_text, track_ids
-        else:
+        else: # Standard mode
             images, targets, target_lengths, labels_text, track_ids = zip(*batch)
             images = torch.stack(images, 0)
-            targets = torch.cat(targets)
+            targets = torch.cat(targets, dim=0)
             target_lengths = torch.tensor(target_lengths, dtype=torch.long)
             return images, targets, target_lengths, labels_text, track_ids

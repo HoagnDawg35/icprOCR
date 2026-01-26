@@ -367,7 +367,7 @@ def mode_train(args, config):
     print(f"Training: Epoch {start_epoch+1}/{config.epochs}")
     print("="*70)
     
-    # trainer.fit(start_epoch=start_epoch, best_acc=best_acc)
+    trainer.fit(start_epoch=start_epoch, best_acc=best_acc)
     
     print("\n✅ Training completed!")
 
@@ -376,16 +376,18 @@ def load_teacher_model(args, config):
     """Load and freeze teacher model for guided training."""
     checkpoint_path = args.teacher_checkpoint or args.checkpoint
     if not checkpoint_path:
-        print("⚠️ WARNING: Guided training requested but no teacher checkpoint provided.")
+        print("⚠️ WARNING: Guided training requested but no teacher checkpoint provided via --teacher-checkpoint or --checkpoint.")
         return None
         
     print(f"\n👩‍🏫 Initializing Teacher Model from: {checkpoint_path}")
     teacher = load_model(config)
-    load_checkpoint(checkpoint_path, teacher, config)
+    # Always load teacher WITHOUT training state (optimizer/scheduler)
+    load_checkpoint(checkpoint_path, teacher, config, load_training_state=False)
     
     for param in teacher.parameters():
         param.requires_grad = False
     teacher.eval()
+    print("   ✅ Teacher model locked in EVAL mode")
     return teacher
 
 

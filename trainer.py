@@ -154,17 +154,10 @@ class Trainer:
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}/{self.config.epochs}")
         
         for batch in pbar:
-            # Detect if batch has HR images (teacher-student mode)
-            has_hr_images = self.teacher_model and len(batch) == 6
-            
-            if has_hr_images:
+            if self.teacher_model and len(batch) == 6:
                 lr_images, hr_images, targets, target_lengths, _, _ = batch
-                # lr_images, hr_images: [B, num_frames, C, H, W]
-                B, T, C, H, W = lr_images.shape
-                
-                # Reshape to [B*T, C, H, W] for model processing
-                lr_images = lr_images.view(B * T, C, H, W).to(self.device)
-                hr_images = hr_images.view(B * T, C, H, W).to(self.device)
+                lr_images = lr_images.to(self.device)
+                hr_images = hr_images.to(self.device)
                 targets = targets.to(self.device)
                 
                 self.optimizer.zero_grad(set_to_none=True)
@@ -177,60 +170,42 @@ class Trainer:
                     # Student features and logits from LR images
                     student_feats, preds = self.model(lr_images, return_feats=True)
                     
-                    # Reshape predictions: [B*T, seq_len, num_classes] -> [B, T, seq_len, num_classes]
-                    preds = preds.view(B, T, preds.size(1), preds.size(2))
-                    preds = preds.mean(dim=1)  # Average across frames: [B, seq_len, num_classes]
-                    
-                    # Average features across frames
-                    teacher_feats = teacher_feats.view(B, T, -1).mean(dim=1)  # [B, feat_dim]
-                    student_feats = student_feats.view(B, T, -1).mean(dim=1)  # [B, feat_dim]
-                    
                     # CTC Loss
                     preds_permuted = preds.permute(1, 0, 2)
                     input_lengths = torch.full(
-                        size=(B,),
+                        size=(lr_images.size(0),),
                         fill_value=preds.size(1),
                         dtype=torch.long
                     )
                     ctc_loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
                     
                     # Contrastive Loss (MSE between features)
+                    # Note: features are [B, Seq_Len, Dim]
                     contrastive_loss = self.contrastive_criterion(student_feats, teacher_feats)
                     
                     # Combined Loss
                     lambda_con = getattr(self.config, 'lambda_contrastive', 1.0)
                     loss = ctc_loss + lambda_con * contrastive_loss
-                
-                # Use B for proper averaging
-                current_batch_size = B
-                
+                    
+                current_batch_size = lr_images.size(0)
             else:
                 images, targets, target_lengths, _, _ = batch
-                # images: [B, num_frames, C, H, W]
-                B, T, C, H, W = images.shape
-                
-                # Reshape to [B*T, C, H, W]
-                images = images.view(B * T, C, H, W).to(self.device)
+                images = images.to(self.device)
                 targets = targets.to(self.device)
                 
                 self.optimizer.zero_grad(set_to_none=True)
                 
                 with autocast('cuda'):
                     preds = self.model(images)
-                    
-                    # Reshape and average across frames
-                    preds = preds.view(B, T, preds.size(1), preds.size(2))
-                    preds = preds.mean(dim=1)  # [B, seq_len, num_classes]
-                    
                     preds_permuted = preds.permute(1, 0, 2)
                     input_lengths = torch.full(
-                        size=(B,),
+                        size=(images.size(0),),
                         fill_value=preds.size(1),
                         dtype=torch.long
                     )
                     loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
-                
-                current_batch_size = B
+                    
+                current_batch_size = images.size(0)
 
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
