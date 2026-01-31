@@ -36,9 +36,9 @@ def plot_error(track_id, frames, gt_text, pred_text, conf, save_path):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Scan OCR model and plot validation errors")
-    parser.add_argument("--checkpoint", type=str, default="results/student_v1_best.pth", help="Path to checkpoint")
+    parser.add_argument("--checkpoint", type=str, default="results/v2.pth", help="Path to checkpoint")
     parser.add_argument("--config", type=str, default="configs/icpr.yaml", help="Path to config file")
-    parser.add_argument("--output_dir", type=str, default="results/validation_errors", help="Output directory for plots")
+    parser.add_argument("--output_dir", type=str, default=None, help="Output directory for plots (defaults to results/validation_errors_<name>)")
     parser.add_argument("--max_plots", type=int, default=50, help="Maximum number of errors to plot")
     return parser.parse_args()
 
@@ -109,6 +109,10 @@ def main():
     print("✅ Weights loaded.")
 
     # 6. Create Output Dir
+    if args.output_dir is None:
+        ckpt_name = os.path.splitext(os.path.basename(args.checkpoint))[0]
+        args.output_dir = os.path.join("results", f"validation_errors_{ckpt_name}")
+    
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"📂 Plotting errors to {args.output_dir}...")
 

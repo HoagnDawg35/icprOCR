@@ -9,7 +9,7 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.utils import seed_everything, char_level_voting, decode_with_confidence
+from src.utils import seed_everything, char_level_voting, decode_with_confidence, SRMetricLoss
 
 
 class Trainer:
@@ -22,32 +22,22 @@ class Trainer:
         val_loader: Optional[DataLoader],
         config,
         idx2char: Dict[int, str],
-        mode: str = 'train',
-        teacher_model: Optional[nn.Module] = None
+        mode: str = 'train'
     ):
         self.model = model
-        self.teacher_model = teacher_model
-        if self.teacher_model:
-            self.teacher_model.eval()
-            for p in self.teacher_model.parameters():
-                p.requires_grad = False
-            print("   ✅ Teacher model initialized and frozen")
-        
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.config = config
         self.idx2char = idx2char
         self.device = config.device
-        print(f"✅ Using device: {self.device}")
         
         seed_everything(config.seed, benchmark=getattr(config, 'use_cudnn_benchmark', False))
-        
+
         if mode == 'train':
             self._init_training_components()
     def _init_training_components(self):
         self.criterion = nn.CTCLoss(blank=0, zero_infinity=True)
-        self.contrastive_criterion = nn.MSELoss()
-
+        # self.sr_loss_func = SRMetricLoss(device=self.device)
         self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
@@ -59,7 +49,7 @@ class Trainer:
             max_lr=self.config.learning_rate,
             steps_per_epoch=len(self.train_loader),
             epochs=self.config.epochs,
-            pct_start=0.3,
+            pct_start=0.2,
             anneal_strategy='cos'
         )
 
@@ -76,138 +66,37 @@ class Trainer:
     def _get_exp_name(self) -> str:
         return getattr(self.config, 'experiment_name', 'baseline')
 
-    # def train_one_epoch(self) -> float:
-    #     self.model.train()
-    #     epoch_loss = 0.0
-    #     pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}/{self.config.epochs}")
-        
-    #     for batch in pbar:
-    #         if self.teacher_model and len(batch) == 6:
-    #             lr_images, hr_images, targets, target_lengths, _, _ = batch
-    #             # print(f"DEBUG: lr_images {lr_images.shape}, hr_images {hr_images.shape}, targets {targets.shape}")
-    #             lr_images = lr_images.to(self.device).contiguous()
-    #             hr_images = hr_images.to(self.device).contiguous()
-    #             targets = targets.to(self.device)
-                
-    #             self.optimizer.zero_grad(set_to_none=True)
-                
-    #             with autocast('cuda'):
-    #                 # Teacher features from HR images
-    #                 with torch.no_grad():
-    #                     teacher_feats, _ = self.teacher_model(hr_images, return_feats=True)
-                    
-    #                 # Student features and logits from LR images
-    #                 student_feats, preds = self.model(lr_images, return_feats=True)
-    #                 # print(f"DEBUG: teacher_feats {teacher_feats.shape}, student_feats {student_feats.shape}, preds {preds.shape}")
-                    
-    #                 # CTC Loss
-    #                 preds_permuted = preds.permute(1, 0, 2)
-    #                 input_lengths = torch.full(
-    #                     size=(lr_images.size(0),),
-    #                     fill_value=preds.size(1),
-    #                     dtype=torch.long
-    #                 )
-    #                 ctc_loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
-                    
-    #                 # Contrastive Loss (MSE between features)
-    #                 contrastive_loss = self.contrastive_criterion(student_feats, teacher_feats)
-                    
-    #                 # Combined Loss
-    #                 lambda_con = getattr(self.config, 'lambda_contrastive', 1.0)
-    #                 loss = ctc_loss + lambda_con * contrastive_loss
-    #         else:
-    #             images, targets, target_lengths, _, _ = batch
-    #             images = images.to(self.device)
-    #             targets = targets.to(self.device)
-                
-    #             self.optimizer.zero_grad(set_to_none=True)
-                
-    #             with autocast('cuda'):
-    #                 preds = self.model(images)
-    #                 preds_permuted = preds.permute(1, 0, 2)
-    #                 input_lengths = torch.full(
-    #                     size=(images.size(0),),
-    #                     fill_value=preds.size(1),
-    #                     dtype=torch.long
-    #                 )
-    #                 loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
-
-    #         self.scaler.scale(loss).backward()
-    #         self.scaler.unscale_(self.optimizer)
-    #         torch.nn.utils.clip_grad_norm_(self.model.parameters(), getattr(self.config, 'grad_clip', 10.0))
-            
-    #         scale_before = self.scaler.get_scale()
-    #         self.scaler.step(self.optimizer)
-    #         self.scaler.update()
-            
-    #         if self.scaler.get_scale() >= scale_before:
-    #             self.scheduler.step()
-            
-    #         epoch_loss += loss.item() * images.size(0)  # better averaging
-    #         pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{self.scheduler.get_last_lr()[0]:.2e}")
-        
-    #     return epoch_loss / len(self.train_loader.dataset)  # per sample
-
     def train_one_epoch(self) -> float:
         self.model.train()
         epoch_loss = 0.0
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}/{self.config.epochs}")
         
-        for batch in pbar:
-            if self.teacher_model and len(batch) == 6:
-                lr_images, hr_images, targets, target_lengths, _, _ = batch
-                lr_images = lr_images.to(self.device)
-                hr_images = hr_images.to(self.device)
-                targets = targets.to(self.device)
-                
-                self.optimizer.zero_grad(set_to_none=True)
-                
-                with autocast('cuda'):
-                    # Teacher features from HR images
-                    with torch.no_grad():
-                        teacher_feats, _ = self.teacher_model(hr_images, return_feats=True)
-                    
-                    # Student features and logits from LR images
-                    student_feats, preds = self.model(lr_images, return_feats=True)
-                    
-                    # CTC Loss
-                    preds_permuted = preds.permute(1, 0, 2)
-                    input_lengths = torch.full(
-                        size=(lr_images.size(0),),
-                        fill_value=preds.size(1),
-                        dtype=torch.long
-                    )
-                    ctc_loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
-                    
-                    # Contrastive Loss (MSE between features)
-                    # Note: features are [B, Seq_Len, Dim]
-                    contrastive_loss = self.contrastive_criterion(student_feats, teacher_feats)
-                    
-                    # Combined Loss
-                    lambda_con = getattr(self.config, 'lambda_contrastive', 1.0)
-                    loss = ctc_loss + lambda_con * contrastive_loss
-                    
-                current_batch_size = lr_images.size(0)
-            else:
-                images, targets, target_lengths, _, _ = batch
-                images = images.to(self.device)
-                targets = targets.to(self.device)
-                
-                self.optimizer.zero_grad(set_to_none=True)
-                
-                with autocast('cuda'):
-                    preds = self.model(images)
-                    preds_permuted = preds.permute(1, 0, 2)
-                    input_lengths = torch.full(
-                        size=(images.size(0),),
-                        fill_value=preds.size(1),
-                        dtype=torch.long
-                    )
-                    loss = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
-                    
-                current_batch_size = images.size(0)
+        for images, targets, target_lengths, _, _, hr_targets in pbar:
+            images = images.to(self.device)
+            targets = targets.to(self.device)
+            hr_targets = hr_targets.to(self.device)
+            
+            self.optimizer.zero_grad(set_to_none=True)
+            
+            with autocast('cuda'):
+                preds = self.model(images)
+                # preds, sr_out = self.model(images, return_sr=True)
+                preds_permuted = preds.permute(1, 0, 2)
+                input_lengths = torch.full(
+                    size=(images.size(0),),
+                    fill_value=preds.size(1),
+                    dtype=torch.long
+                )
+                loss_ctc = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
+                # loss_sr = self.criterion_sr(sr_out, hr_targets)
 
-            self.scaler.scale(loss).backward()
+                # mse, perceptual, edge = self.sr_loss_func(sr_out, hr_targets)
+                # loss_sr_total = 1.0 * mse + 0.5 * perceptual + 0.3 * edge
+                loss_sr_total = torch.tensor(0.0).to(self.device) 
+                total_loss = loss_ctc + 0.5 * loss_sr_total
+
+
+            self.scaler.scale(total_loss).backward()
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), getattr(self.config, 'grad_clip', 10.0))
             
@@ -218,10 +107,13 @@ class Trainer:
             if self.scaler.get_scale() >= scale_before:
                 self.scheduler.step()
             
-            epoch_loss += loss.item() * current_batch_size
-            pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{self.scheduler.get_last_lr()[0]:.2e}")
-        
-        return epoch_loss / len(self.train_loader.dataset)
+            epoch_loss += total_loss.item() * images.size(0)  # better averaging
+            pbar.set_postfix(
+                ctc=f"{loss_ctc.item():.3f}", 
+                sr=f"{loss_sr_total.item():.3f}", 
+                lr=f"{self.scheduler.get_last_lr()[0]:.2e}"
+            )        
+        return epoch_loss / len(self.train_loader.dataset)  # per sample
 
     def validate(self) -> Tuple[Dict[str, float], List[str]]:
         """Run validation and generate submission data."""
@@ -237,11 +129,12 @@ class Trainer:
         submission_data: List[str] = []
         
         with torch.no_grad():
-            for images, targets, target_lengths, labels_text, track_ids in self.val_loader:
+            for images, targets, target_lengths, labels_text, track_ids, hr_targets in self.val_loader:
                 images = images.to(self.device)
                 targets = targets.to(self.device)
+                hr_targets = hr_targets.to(self.device)
+                # preds, sr_out = self.model(images, return_sr=True)
                 preds = self.model(images)
-                
                 input_lengths = torch.full(
                     (images.size(0),),
                     preds.size(1),
@@ -253,7 +146,10 @@ class Trainer:
                     input_lengths,
                     target_lengths
                 )
-                # ✅ FIX: Giống train - nhân với batch size
+                # mse, perceptual, edge = self.sr_loss_func(sr_out, hr_targets)
+                # loss_sr_total = 1.0 * mse + 0.1 * perceptual + 0.1 * edge
+                loss_sr_total = torch.tensor(0.0).to(self.device)
+                loss = loss + 0.5 * loss_sr_total
                 val_loss += loss.item() * images.size(0)
 
                 # Decode predictions
@@ -392,7 +288,7 @@ class Trainer:
         submission_lines = []
         
         with torch.no_grad(), tqdm(total=len(test_loader), desc="Predict") as pbar:
-            for images, _, _, _, track_ids in test_loader:
+            for images, _, _, _, track_ids, _ in test_loader:
                 images = images.to(self.device)
                 preds = self.model(images)
                 decoded = decode_with_confidence(preds, self.idx2char)

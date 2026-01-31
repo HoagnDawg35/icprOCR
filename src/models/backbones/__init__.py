@@ -1,1 +1,2 @@
 from src.models.backbones.resnet34 import ResNetFeatureExtractor
+from src.models.backbones.convnext import ConvNeXtFeatureExtractor

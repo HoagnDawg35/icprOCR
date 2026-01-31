@@ -26,9 +26,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["train", "infer"],
+        choices=["train", "infer", "tune"],
         default="train",
-        help="Mode: 'train' to train model, 'infer' to generate submission"
+        help="Mode: 'train' to train model, 'infer' to generate submission, 'tune' for hyperparameter tuning"
     )
     
     # ========== CHECKPOINT ==========
@@ -93,25 +93,6 @@ def parse_args() -> argparse.Namespace:
     )
     
     # ========== MODEL CONFIG ==========
-    parser.add_argument(
-        "--hr-only",
-        action="store_true",
-        help="Train only on HR images (synthetic LR)"
-    )
-    
-    parser.add_argument(
-        "--hr-guided",
-        action="store_true",
-        help="Train on LR images with HR guidance (Contrastive Loss)"
-    )
-    
-    parser.add_argument(
-        "--teacher-checkpoint",
-        type=str,
-        default=None,
-        help="Path to HR-pretrained teacher checkpoint"
-    )
-
     parser.add_argument(
         "--no-stn",
         action="store_true",
@@ -214,15 +195,11 @@ def load_checkpoint(checkpoint_path, model, config, load_training_state=False):
     
     # Load model weights
     if 'model_state_dict' in checkpoint:
-        msg = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
     else:
-        msg = model.load_state_dict(checkpoint, strict=False)
+        model.load_state_dict(checkpoint)
     
     print("   ✅ Model weights loaded")
-    if len(msg.missing_keys) > 0:
-        print(f"   ⚠️  Missing keys in state_dict: {msg.missing_keys}")
-    if len(msg.unexpected_keys) > 0:
-        print(f"   ⚠️  Unexpected keys in state_dict: {msg.unexpected_keys}")
     
     # Return training state if needed
     if load_training_state and 'epoch' in checkpoint:
@@ -257,8 +234,6 @@ def mode_train(args, config):
         'seed': config.seed,
         'augmentation_level': config.augmentation_level,
         'num_frames': config.num_frames,
-        'train_hr_only': getattr(args, 'hr_only', False),
-        'hr_guided': getattr(args, 'hr_guided', False),
     }
     
     # Create datasets
@@ -324,8 +299,7 @@ def mode_train(args, config):
         train_loader=train_loader,
         val_loader=val_loader,
         config=config,
-        idx2char=config.idx2char,
-        teacher_model=load_teacher_model(args, config) if args.hr_guided else None
+        idx2char=config.idx2char
     )
     
     # Load checkpoint if resuming
@@ -370,25 +344,6 @@ def mode_train(args, config):
     trainer.fit(start_epoch=start_epoch, best_acc=best_acc)
     
     print("\n✅ Training completed!")
-
-
-def load_teacher_model(args, config):
-    """Load and freeze teacher model for guided training."""
-    checkpoint_path = args.teacher_checkpoint or args.checkpoint
-    if not checkpoint_path:
-        print("⚠️ WARNING: Guided training requested but no teacher checkpoint provided via --teacher-checkpoint or --checkpoint.")
-        return None
-        
-    print(f"\n👩‍🏫 Initializing Teacher Model from: {checkpoint_path}")
-    teacher = load_model(config)
-    # Always load teacher WITHOUT training state (optimizer/scheduler)
-    load_checkpoint(checkpoint_path, teacher, config, load_training_state=False)
-    
-    for param in teacher.parameters():
-        param.requires_grad = False
-    teacher.eval()
-    print("   ✅ Teacher model locked in EVAL mode")
-    return teacher
 
 
 def mode_infer(args, config):
@@ -512,7 +467,7 @@ def main():
     print(f"EPOCHS          : {config.epochs}")
     print(f"BATCH_SIZE      : {config.batch_size}")
     print(f"LEARNING_RATE   : {config.learning_rate}")
-    print(f"🚀 DEVICE        : {config.device}")
+    print(f"DEVICE          : {config.device}")
     print(f"CHECKPOINT      : {args.checkpoint if args.checkpoint else 'None'}")
     print(f"OUTPUT_DIR      : {config.OUTPUT_DIR}")
     
@@ -521,6 +476,9 @@ def main():
         mode_train(args, config)
     elif args.mode == "infer":
         mode_infer(args, config)
+    elif args.mode == "tune":
+        from autotune import run_tuning
+        run_tuning(config, args)
     else:
         print(f"❌ Unknown mode: {args.mode}")
         sys.exit(1)
