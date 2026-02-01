@@ -8,7 +8,7 @@ The goal is to improve the performance of a **Student** model on Low-Resolution 
 ## 2. Architecture Setup
 
 ### Models
-*   **Architecture**: `ResTranOCR` (ResNet Backbone + TPS + Transformer Encoder + CTC Head).
+*   **Architecture**: `ResTranOCR` (ResNet Backbone + Transformer Encoder + CTC Head).
 *   **Teacher**: A pre-trained `ResTranOCR` model trained **exclusively on clean HR images**. Its weights are **frozen** during the distillation phase.
 *   **Student**: An identical `ResTranOCR` architecture initialized with random weights (or pre-trained weights) trained on **LR images**.
 
