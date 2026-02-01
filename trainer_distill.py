@@ -251,6 +251,7 @@ class TrainerDistill:
             'config': vars(self.config) if hasattr(self.config, '__dict__') else {},
         }
         torch.save(checkpoint, path)
+        print(f"  💾 {'⭐ Best' if is_best else 'Last'} checkpoint saved: {path}")
 
     def save_submission(self, submission_data: List[str]) -> None:
         exp_name = self._get_exp_name()

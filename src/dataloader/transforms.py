@@ -41,7 +41,10 @@ def get_train_transforms(img_height: int = 32, img_width: int = 128) -> A.Compos
                 num_holes_range=(1, 3),
                 hole_height_range=(2, 6),
                 hole_width_range=(2, 6),
-                fill_value=0
+                max_holes=2,
+                max_height=4,
+                max_width=4,
+                rotate=(-5, 5)
             ),
         ], p=0.3),
 
