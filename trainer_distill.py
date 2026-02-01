@@ -83,7 +83,7 @@ class TrainerDistill:
             ctc_return_feats=False # We handle features explicitly in forward
         )
         
-        checkpoint = torch.load(teacher_path, map_location=self.device)
+        checkpoint = torch.load(teacher_path, map_location=self.device, weights_only=False)
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         
         # Load weights

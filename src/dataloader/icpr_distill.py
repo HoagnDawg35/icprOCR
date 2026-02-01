@@ -351,7 +351,8 @@ class ICPR_LPR_Distill_Dataset(Dataset):
         
         else:
             # Fallback to standard (or validation)
-            return super().__getitem__(idx) # Attempt to use parent logic if possible? 
+            # Fallback to standard (or validation)
+            # return super().__getitem__(idx) # Removed erroneous call
             # But parent logic is not inherited easily if we overwrite dict.
             # I'll just copy the standard logic.
             

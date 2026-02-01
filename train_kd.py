@@ -114,7 +114,7 @@ def train_teacher(args, config):
     best_acc = 0.0
     if args.checkpoint:
         print(f"📥 Resuming Teacher from: {args.checkpoint}")
-        ckpt = torch.load(args.checkpoint, map_location=config.device)
+        ckpt = torch.load(args.checkpoint, map_location=config.device, weights_only=False)
         model.load_state_dict(ckpt['model_state_dict'] if 'model_state_dict' in ckpt else ckpt)
         if 'epoch' in ckpt: start_epoch = ckpt['epoch'] + 1
         if 'best_acc' in ckpt: best_acc = ckpt['best_acc']
@@ -195,7 +195,7 @@ def train_student(args, config):
     best_acc = 0.0
     if args.checkpoint:
         print(f"📥 Resuming Student from: {args.checkpoint}")
-        ckpt = torch.load(args.checkpoint, map_location=config.device)
+        ckpt = torch.load(args.checkpoint, map_location=config.device, weights_only=False)
         model.load_state_dict(ckpt['model_state_dict'] if 'model_state_dict' in ckpt else ckpt, strict=False)
         if 'epoch' in ckpt: start_epoch = ckpt['epoch'] + 1
         if 'best_acc' in ckpt: best_acc = ckpt['best_acc']
