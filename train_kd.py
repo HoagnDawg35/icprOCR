@@ -15,7 +15,7 @@ from src.dataloader.icpr_distill import ICPR_LPR_Distill_Dataset
 from src.models.model_distill import ResTranOCR_Distill
 
 # Imports for trainers
-# from trainer import Trainer
+from trainer import Trainer
 from trainer_distill import TrainerDistill
 from src.utils import seed_everything
 

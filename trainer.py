@@ -9,7 +9,7 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.utils import seed_everything, char_level_voting, decode_with_confidence, SRMetricLoss
+from src.utils import seed_everything, char_level_voting, decode_with_confidence
 
 
 class Trainer:
@@ -71,10 +71,17 @@ class Trainer:
         epoch_loss = 0.0
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1}/{self.config.epochs}")
         
-        for images, targets, target_lengths, _, _, hr_targets in pbar:
+        for batch in pbar:
+            if len(batch) == 6:
+                images, targets, target_lengths, _, _, hr_targets = batch
+            else:
+                 images, targets, target_lengths, _, _ = batch
+                 hr_targets = None # No HR targets in standard mode
+            
             images = images.to(self.device)
             targets = targets.to(self.device)
-            hr_targets = hr_targets.to(self.device)
+            if hr_targets is not None:
+                hr_targets = hr_targets.to(self.device)
             
             self.optimizer.zero_grad(set_to_none=True)
             
