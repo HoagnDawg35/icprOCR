@@ -1,0 +1,50 @@
+# Training Configuration: Knowledge Distillation
+# Teacher: HR-only (frozen) | Student: LR (train)
+
+# Experiment tracking
+model_type: "restran" 
+student_model_type: "restran_distill" # Use the new model class with feature return
+experiment_name: "restran_distill_l2"
+augmentation_level: "full"  
+use_stn: true 
+clean_hr_guided: true # New flag to return clean HR images for teacher
+
+# Distillation
+teacher_checkpoint: "results/hr_baseline_v1.pth"
+distill_weight: 1.0
+distill_layer: "transformer" # Option: transformer, backbone
+
+# Data paths
+data_root: "data/train"
+test_data_root: "data/test"
+val_split_file: "data/val_tracks.json"
+submission_file: "submission.txt"
+
+# Image dimensions
+img_height: 32
+img_width: 128
+num_frames: 5
+chars: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+# Training hyperparameters
+batch_size: 64
+learning_rate: 0.0003
+epochs: 50
+seed: 42
+num_workers: 8
+weight_decay: 0.0001
+grad_clip: 5.0
+split_ratio: 0.9
+
+# ResTranOCR model hyperparameters
+transformer_heads: 8
+transformer_layers: 3
+transformer_ff_dim: 2048
+transformer_dropout: 0.1
+ctc_head:
+  mid_channels: 1024        
+  dropout: 0.1
+  return_feats: false
+
+# Output directory
+output_dir: "results"

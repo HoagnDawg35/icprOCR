@@ -9,6 +9,9 @@ import numpy as np
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import argparse
+import json
+import Levenshtein
+import seaborn as sns
 
 from src.models import ResTranOCR
 from src.dataloader.icpr import ICPR_LPR_Datatset
@@ -34,12 +37,235 @@ def plot_error(track_id, frames, gt_text, pred_text, conf, save_path):
     plt.savefig(save_path)
     plt.close()
 
+def get_alignment_ops(gt, pred):
+    """Returns Levenshtein edit operations for GT and Pred."""
+    return Levenshtein.editops(gt, pred)
+
+def update_confusion_matrix(cm, gt, pred, chars):
+    """Updates the character confusion matrix based on alignment."""
+    ops = get_alignment_ops(gt, pred)
+    
+    # We use a special character '-' for insertions/deletions (epsilon)
+    # cm is a dict of dicts: cm[gt_char][pred_char] = count
+    
+    # To track matches and substitutions easily, we can use a simpler approach:
+    # 1. Start with full GT matched to nothing.
+    # 2. Apply ops to find substitutions, deletions, and insertions.
+    
+    gt_list = list(gt)
+    pred_list = list(pred)
+    
+    # Track used indices to identify matches
+    gt_used = [False] * len(gt)
+    pred_used = [False] * len(pred)
+    
+    for op, i, j in ops:
+        if op == 'replace':
+            char_gt = gt[i]
+            char_pred = pred[j]
+            cm[char_gt][char_pred] += 1
+            gt_used[i] = True
+            pred_used[j] = True
+        elif op == 'delete':
+            char_gt = gt[i]
+            cm[char_gt]['<DEL>'] += 1
+            gt_used[i] = True
+        elif op == 'insert':
+            char_pred = pred[j]
+            cm['<INS>'][char_pred] += 1
+            pred_used[j] = True
+            
+    # Matches
+    for i in range(len(gt)):
+        if not gt_used[i]:
+            char_gt = gt[i]
+            cm[char_gt][char_gt] += 1
+
+def plot_confusion_matrix(cm, chars, save_path):
+    """Plots the confusion matrix as a heatmap."""
+    # Add special tokens to chars list for plotting
+    plot_chars = sorted(list(chars))
+    all_chars = plot_chars + ['<DEL>', '<INS>']
+    
+    # Initialize matrix
+    matrix = np.zeros((len(all_chars), len(all_chars)))
+    
+    for i, c1 in enumerate(all_chars):
+        for j, c2 in enumerate(all_chars):
+            if c1 in cm and c2 in cm[c1]:
+                matrix[i, j] = cm[c1][c2]
+                
+    # Filter out empty rows/cols to make it readable
+    row_sums = matrix.sum(axis=1)
+    col_sums = matrix.sum(axis=2 if len(matrix.shape)>2 else 0) # wait matrix is 2D
+    col_sums = matrix.sum(axis=0)
+    
+    mask_rows = row_sums > 0
+    mask_cols = col_sums > 0
+    mask = mask_rows | mask_cols
+    
+    final_chars = [all_chars[i] for i in range(len(all_chars)) if mask[i]]
+    final_matrix = matrix[mask][:, mask]
+    
+    if final_matrix.size == 0:
+        print("⚠️ Confusion matrix is empty, skipping plot.")
+        return
+
+    plt.figure(figsize=(20, 16))
+    sns.heatmap(final_matrix, annot=True, fmt='.0f', cmap='YlGnBu',
+                xticklabels=final_chars, yticklabels=final_chars)
+    plt.xlabel('Predicted')
+    plt.ylabel('Ground Truth')
+    plt.title('Character-wise Confusion Matrix')
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"✅ Confusion matrix saved to {save_path}")
+
+def plot_enhanced_heatmaps(cm, chars, output_dir):
+    """Plots normalized and error-only heatmaps."""
+    plot_chars = sorted(list(chars))
+    all_chars = plot_chars + ['<DEL>', '<INS>']
+    
+    # Initialize matrix
+    matrix = np.zeros((len(all_chars), len(all_chars)))
+    for i, c1 in enumerate(all_chars):
+        for j, c2 in enumerate(all_chars):
+            if c1 in cm and c2 in cm[c1]:
+                matrix[i, j] = cm[c1][c2]
+                
+    # Filter empty rows/cols
+    row_sums = matrix.sum(axis=1)
+    col_sums = matrix.sum(axis=0)
+    mask = (row_sums > 0) | (col_sums > 0)
+    
+    final_chars = [all_chars[i] for i in range(len(all_chars)) if mask[i]]
+    final_matrix = matrix[mask][:, mask]
+    
+    if final_matrix.size == 0:
+        return
+
+    # 1. Normalized Heatmap
+    # Normalize by row (Ground Truth totals)
+    row_totals = final_matrix.sum(axis=1, keepdims=True)
+    # Avoid division by zero
+    row_totals[row_totals == 0] = 1
+    norm_matrix = (final_matrix / row_totals) * 100
+    
+    plt.figure(figsize=(20, 16))
+    sns.heatmap(norm_matrix, annot=True, fmt='.1f', cmap='YlGnBu',
+                xticklabels=final_chars, yticklabels=final_chars)
+    plt.xlabel('Predicted')
+    plt.ylabel('Ground Truth')
+    plt.title('Normalized Confusion Matrix (%)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "char_confusion_matrix_norm.png"))
+    plt.close()
+    print(f"✅ Normalized confusion matrix saved.")
+
+    # 2. Errors-only Heatmap (Mask Diagonal)
+    error_matrix = final_matrix.copy()
+    np.fill_diagonal(error_matrix, 0)
+    
+    # Filter again for entries that actually have errors
+    err_row_sums = error_matrix.sum(axis=1)
+    err_col_sums = error_matrix.sum(axis=0)
+    err_mask = (err_row_sums > 0) | (err_col_sums > 0)
+    
+    err_chars = [final_chars[i] for i in range(len(final_chars)) if err_mask[i]]
+    err_matrix_final = error_matrix[err_mask][:, err_mask]
+    
+    if err_matrix_final.size > 0:
+        plt.figure(figsize=(20, 16))
+        sns.heatmap(err_matrix_final, annot=True, fmt='.0f', cmap='OrRd',
+                    xticklabels=err_chars, yticklabels=err_chars)
+        plt.xlabel('Predicted')
+        plt.ylabel('Ground Truth')
+        plt.title('Character-wise Error Confusions (Diagonal Hidden)')
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, "char_error_heatmap.png"))
+        plt.close()
+        print(f"✅ Error-only heatmap saved.")
+
+def print_top_errors(cm, top_n=10):
+    """Prints a summary of the most frequent character substitutions."""
+    errors = []
+    for gt_char, preds in cm.items():
+        for pred_char, count in preds.items():
+            if gt_char != pred_char and count > 0:
+                errors.append((gt_char, pred_char, count))
+    
+    # Sort by count
+    errors.sort(key=lambda x: x[2], reverse=True)
+    
+    print(f"\n📢 Top {top_n} Character Errors:")
+    print(f"{'GT':<8} -> {'Pred':<8} : {'Count':<6}")
+    print("-" * 30)
+    for gt, pred, count in errors[:top_n]:
+        print(f"{gt:<8} -> {pred:<8} : {count:<6}")
+    print("")
+
+def print_character_stats(cm, chars, output_dir=None):
+    """Prints a detailed table of character-wise statistics and saves to CSV."""
+    plot_chars = sorted(list(chars))
+    
+    # Prepare CSV data
+    csv_rows = ["Char,Total,Correct,Sub,Del,Ins,Err%"]
+    
+    print("\n📊 Character-wise Error Statistics:")
+    header = f"{'Char':<6} | {'Total':<6} | {'Correct':<8} | {'Sub':<6} | {'Del':<6} | {'Ins':<6} | {'Err%':<6}"
+    print(header)
+    print("-" * len(header))
+    
+    total_gt_all = 0
+    total_correct_all = 0
+    total_sub_all = 0
+    total_del_all = 0
+    total_ins_all = 0
+    
+    for c in plot_chars:
+        # Total GT occurrences = Matches + Substitutions + Deletions
+        correct = cm[c][c]
+        deleted = cm[c]['<DEL>']
+        substituted = sum(count for pred, count in cm[c].items() if pred != c and pred != '<DEL>' and pred != '<INS>')
+        total_gt = correct + deleted + substituted
+        
+        inserted = cm['<INS>'][c]
+        
+        error_rate = ((total_gt - correct + inserted) / total_gt * 100) if total_gt > 0 else 0
+        
+        if total_gt > 0 or inserted > 0:
+            print(f"{c:<6} | {total_gt:<6} | {correct:<8} | {substituted:<6} | {deleted:<6} | {inserted:<6} | {error_rate:>5.1f}%")
+            csv_rows.append(f"{c},{total_gt},{correct},{substituted},{deleted},{inserted},{error_rate:.1f}")
+            
+            total_gt_all += total_gt
+            total_correct_all += correct
+            total_sub_all += substituted
+            total_del_all += deleted
+            total_ins_all += inserted
+
+    # Print Insertions that don't map to a specific character if any (though cm['<INS>'] handles it)
+    
+    print("-" * len(header))
+    total_err_rate = ((total_gt_all - total_correct_all + total_ins_all) / total_gt_all * 100) if total_gt_all > 0 else 0
+    print(f"{'TOTAL':<6} | {total_gt_all:<6} | {total_correct_all:<8} | {total_sub_all:<6} | {total_del_all:<6} | {total_ins_all:<6} | {total_err_rate:>5.1f}%")
+    csv_rows.append(f"TOTAL,{total_gt_all},{total_correct_all},{total_sub_all},{total_del_all},{total_ins_all},{total_err_rate:.1f}")
+    print("")
+
+    if output_dir:
+        csv_path = os.path.join(output_dir, "char_stats.csv")
+        with open(csv_path, 'w') as f:
+            f.write("\n".join(csv_rows))
+        print(f"✅ Character statistics saved to {csv_path}")
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Scan OCR model and plot validation errors")
     parser.add_argument("--checkpoint", type=str, default="results/v2.pth", help="Path to checkpoint")
     parser.add_argument("--config", type=str, default="configs/icpr.yaml", help="Path to config file")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory for plots (defaults to results/validation_errors_<name>)")
     parser.add_argument("--max_plots", type=int, default=50, help="Maximum number of errors to plot")
+    parser.add_argument("--plot_cm", type=bool, default=True, help="Whether to plot confusion matrix")
+    parser.add_argument("--gt_json", type=str, default="data/ground_truth.json", help="Path to ground truth JSON")
     return parser.parse_args()
 
 def main():
@@ -65,6 +291,22 @@ def main():
     char2idx = {char: i + 1 for i, char in enumerate(chars)}
     num_classes = len(chars) + 1
 
+    # 2.b Load Ground Truth JSON
+    gt_data = {}
+    if os.path.exists(args.gt_json):
+        print(f"📂 Loading ground truth labels from {args.gt_json}...")
+        with open(args.gt_json, 'r') as f:
+            gt_data = json.load(f)
+    
+    # Initialize character confusion matrix
+    # Format: cm[gt_char][pred_char] = count
+    from collections import defaultdict
+    cm = defaultdict(lambda: defaultdict(int))
+    all_chars_with_special = list(chars) + ['<DEL>', '<INS>']
+    for c1 in all_chars_with_special:
+        for c2 in all_chars_with_special:
+            cm[c1][c2] = 0
+
     # 3. Load Dataset
     print("📂 Loading dataset...")
     val_dataset = ICPR_LPR_Datatset(
@@ -80,7 +322,6 @@ def main():
     print(f"✅ Loaded {len(val_dataset)} validation samples.")
 
     # 4. Initialize Model (ResTranOCR)
-    print("🏗️ Initializing ResTranOCR model...")
     model = ResTranOCR(
         num_classes=num_classes,
         num_frames=config.num_frames,
@@ -128,10 +369,15 @@ def main():
             
             decoded = decode_with_confidence(preds, idx2char)
             pred_text, conf = decoded[0]
-            gt_text = labels_text[0]
             track_id = track_ids[0]
             
+            # Prefer ground_truth.json label if available
+            gt_text = gt_data.get(track_id, labels_text[0])
+            
             total_samples += 1
+
+            # Update character confusion matrix
+            update_confusion_matrix(cm, gt_text, pred_text, chars)
 
             if pred_text != gt_text:
                 total_errors += 1
@@ -139,6 +385,7 @@ def main():
                     save_path = os.path.join(args.output_dir, f"{track_id}_error.png")
                     plot_error(track_id, images[0], gt_text, pred_text, conf, save_path)
                     count += 1
+            
                 
     accuracy = (1 - total_errors / total_samples) * 100 if total_samples > 0 else 0
     print(f"\n📊 Summary:")
@@ -146,7 +393,16 @@ def main():
     print(f"   - Total Errors : {total_errors}")
     print(f"   - Val Accuracy : {accuracy:.2f}%")
     print(f"   - Plotted      : {count} errors to {args.output_dir}")
-    print(f"🏁 Finished.")
+
+    # Plot Confusion Matrix
+    if args.plot_cm:
+        cm_save_path = os.path.join(args.output_dir, "char_confusion_matrix.png")
+        plot_confusion_matrix(cm, chars, cm_save_path)
+        plot_enhanced_heatmaps(cm, chars, args.output_dir)
+        print_top_errors(cm)
+        print_character_stats(cm, chars, args.output_dir)
+
+    print("🏁 Finished.")
 
 if __name__ == "__main__":
     main()
