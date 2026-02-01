@@ -125,7 +125,7 @@ class TrainerDistill:
             with autocast('cuda'):
                 # 1. Teacher Forward (HR)
                 with torch.no_grad():
-                    _, teacher_feats_dict = self.teacher_model(hr_images, return_feats=True)
+                    teacher_logits, teacher_feats_dict = self.teacher_model(hr_images, return_feats=True)
                     teacher_feat = teacher_feats_dict['transformer_out'] # [B, T', C]
                 
                 # 2. Student Forward (LR)
@@ -139,8 +139,19 @@ class TrainerDistill:
                 loss_ctc = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
                 
                 # Distillation Loss (L2)
-                # Ensure shapes match
-                loss_distill = self.distill_loss_fn(student_feat, teacher_feat)
+                # 1. Transformer Feature Loss
+                loss_distill_trans = self.distill_loss_fn(student_feats_dict['transformer_out'], teacher_feats_dict['transformer_out'])
+                
+                # 2. Backbone Feature Loss
+                loss_distill_backbone = self.distill_loss_fn(student_feats_dict['backbone_out'], teacher_feats_dict['backbone_out'])
+                
+                # 3. Logits (Character-wise) Loss
+                # L2 on the final character probability map
+                loss_distill_logits = self.distill_loss_fn(student_logits, teacher_logits)
+                
+                # Weighted Sum (Assuming equal weight for now or controlled by global distill_weight)
+                # You can add specific weights in config if needed, e.g., alpha, beta, gamma
+                loss_distill = loss_distill_trans + loss_distill_backbone + loss_distill_logits
                 
                 w_distill = getattr(self.config, 'distill_weight', 1.0)
                 total_loss = loss_ctc + (w_distill * loss_distill)
