@@ -136,10 +136,17 @@ class Trainer:
         submission_data: List[str] = []
         
         with torch.no_grad():
-            for images, targets, target_lengths, labels_text, track_ids, hr_targets in self.val_loader:
+            for batch in self.val_loader:
+                if len(batch) == 6:
+                    images, targets, target_lengths, labels_text, track_ids, hr_targets = batch
+                else:
+                    images, targets, target_lengths, labels_text, track_ids = batch
+                    hr_targets = None
+
                 images = images.to(self.device)
                 targets = targets.to(self.device)
-                hr_targets = hr_targets.to(self.device)
+                if hr_targets is not None:
+                     hr_targets = hr_targets.to(self.device)
                 # preds, sr_out = self.model(images, return_sr=True)
                 preds = self.model(images)
                 input_lengths = torch.full(

@@ -30,7 +30,6 @@ def get_hr_train_transforms(img_height: int = 32, img_width: int = 128) -> A.Com
                 translate_percent=(0.05, 0.05),
                 rotate=(-10, 10),
                 shear=(-5, 5),
-                cval=128,
             ),
             A.Perspective(scale=(0.02, 0.08)),
             A.GridDistortion(num_steps=5, distort_limit=0.3),

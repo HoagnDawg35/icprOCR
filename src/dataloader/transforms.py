@@ -14,7 +14,6 @@ def get_train_transforms(img_height: int = 32, img_width: int = 128) -> A.Compos
                 translate_percent=(0.05, 0.05),
                 rotate=(-10, 10),
                 shear=(-5, 5),
-                cval=128,
             ),
             A.Perspective(scale=(0.02, 0.08)),
             A.GridDistortion(num_steps=5, distort_limit=0.3),
@@ -36,15 +35,12 @@ def get_train_transforms(img_height: int = 32, img_width: int = 128) -> A.Compos
         
         # --- NEW: Environmental factors & Artifacts ---
         A.OneOf([
-            A.GaussNoise(var_limit=(10.0, 50.0)),
-            A.ImageCompression(quality_lower=60, quality_upper=100),
+            A.GaussNoise(std_range=(0.04, 0.20)),
+            A.ImageCompression(quality_range=(60, 100)),
             A.CoarseDropout(
-                max_holes=3,
-                max_height=6,
-                max_width=6,
-                min_holes=1,
-                min_height=2,
-                min_width=2,
+                num_holes_range=(1, 3),
+                hole_height_range=(2, 6),
+                hole_width_range=(2, 6),
                 fill_value=0
             ),
         ], p=0.3),
@@ -75,8 +71,8 @@ def get_degradation_transforms() -> A.Compose:
             A.GaussNoise(p=1.0),
             A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=1.0)
         ], p=0.7),
-        A.ImageCompression(quality_lower=20, quality_upper=50, p=0.5),
-        A.Downscale(scale_min=0.3, scale_max=0.5, p=0.5),
+        A.ImageCompression(quality_range=(20, 50), p=0.5),
+        A.Downscale(scale_range=(0.3, 0.5), p=0.5),
     ])
 
 
