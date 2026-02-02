@@ -620,3 +620,124 @@ class PositionalEncoding(nn.Module):
         """
         x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
+
+class PositionAwareModule(nn.Module):
+    """
+    Lightweight Position-Aware Module (PAM) for TBSRN.
+    Uses global context and spatial attention to focus on character-level locations.
+    """
+    def __init__(self, channels: int, reduction: int = 4):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        # Spatial attention path: Lightweight 7x7 conv for large receptive field
+        self.spatial_attn = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
+            nn.Sigmoid()
+        )
+        
+        # Channel attention path (lightweight)
+        self.channel_attn = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Spatial attention
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        s_attn = self.spatial_attn(torch.cat([avg_out, max_out], dim=1))
+        
+        # Channel attention
+        b, c, _, _ = x.size()
+        c_attn = self.avg_pool(x).view(b, c)
+        c_attn = self.channel_attn(c_attn).view(b, c, 1, 1)
+        
+        return x * s_attn * c_attn
+
+class ContentAwareModule(nn.Module):
+    """
+    Lightweight Content-Aware Module (CAM) for TBSRN.
+    Uses depthwise separable convolutions for gated fusion.
+    """
+    def __init__(self, channels: int):
+        super().__init__()
+        # Depthwise Separable Convolution for content extraction
+        self.content_conv = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels, bias=False),
+            nn.Conv2d(channels, channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Gating mechanism
+        self.gate = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=1, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        content = self.content_conv(x)
+        gate = self.gate(x)
+        return x + content * gate
+
+class TBSRNBlock(nn.Module):
+    """
+    Adjustable and Lightweight TBSRN Building Block.
+    Combines MHSA with PAM and CAM.
+    """
+    def __init__(self, channels: int, num_heads: int = 4, dropout: float = 0.1, use_pam: bool = True, use_cam: bool = True):
+        super().__init__()
+        self.use_pam = use_pam
+        self.use_cam = use_cam
+        
+        # Multi-Head Self-Attention (MHSA) applied spatially
+        self.attn = nn.MultiheadAttention(
+            embed_dim=channels,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.norm1 = nn.LayerNorm(channels)
+        
+        # PAM and CAM modules
+        if self.use_pam:
+            self.pam = PositionAwareModule(channels)
+        if self.use_cam:
+            self.cam = ContentAwareModule(channels)
+            
+        # Refinement convolution (Depthwise Separable)
+        self.refine = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3, padding=1, groups=channels, bias=False),
+            nn.Conv2d(channels, channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, c, h, w = x.size()
+        
+        # 1. Spatial Attention (PAM)
+        if self.use_pam:
+            x = self.pam(x)
+            
+        # 2. Sequential Self-Attention (MHSA)
+        # Reshape for attention: [B, C, H, W] -> [B, H*W, C]
+        x_flat = x.view(b, c, -1).permute(0, 2, 1)
+        x_norm = self.norm1(x_flat)
+        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        x_flat = x_flat + attn_out
+        
+        # 3. Content Refinement (CAM)
+        # Reshape back: [B, H*W, C] -> [B, C, H, W]
+        x = x_flat.permute(0, 2, 1).view(b, c, h, w)
+        if self.use_cam:
+            x = self.cam(x)
+            
+        # Final refinement
+        x = self.refine(x)
+        
+        return x

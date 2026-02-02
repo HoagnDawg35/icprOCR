@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from src.models.heads import CTCHead
 from src.models.backbones import ResNetFeatureExtractor, ConvNeXtFeatureExtractor
-from src.models.necks import STNBlock, AttentionFusion, PositionalEncoding, BiFPNFusion, TemporalConvFusion, MultiHeadCA, ResBlock, Upsampler
+from src.models.necks import STNBlock, AttentionFusion, PositionalEncoding, BiFPNFusion, TemporalConvFusion, MultiHeadCA, ResBlock, Upsampler, TBSRNBlock
 # from src.models.model_sr import StackedSRNet
 
 class ResTranOCR(nn.Module):
@@ -20,6 +20,7 @@ class ResTranOCR(nn.Module):
         transformer_ff_dim: int = 2048,
         dropout: float = 0.1,
         use_stn: bool = True,
+        use_tbsrn: bool = False,
         ctc_mid_channels: int = None,  
         ctc_return_feats: bool = False,
         ctc_dropout: float = 0.1,
@@ -28,6 +29,7 @@ class ResTranOCR(nn.Module):
         super().__init__()
         self.cnn_channels = 512
         self.use_stn = use_stn
+        self.use_tbsrn = use_tbsrn
         self.num_frames = num_frames
         # 1. Spatial Transformer Network
         if self.use_stn:
@@ -40,11 +42,15 @@ class ResTranOCR(nn.Module):
         #     pretrained=False,
         # )
         
-        # 3. Attention Fusion
+        # 3. TBSRN (Transformer-Based Super-Resolution Network) [Optional]
+        if self.use_tbsrn:
+            self.tbsrn = TBSRNBlock(channels=self.cnn_channels)
+
+        # 4. Attention Fusion
         self.fusion = AttentionFusion(channels=self.cnn_channels)
         # self.fusion = BiFPNFusion(channels=self.cnn_channels)
         # self.fusion = TemporalConvFusion(channels=self.cnn_channels)
-        # 4. Transformer Encoder
+        # 5. Transformer Encoder
         self.pos_encoder = PositionalEncoding(d_model=self.cnn_channels, dropout=dropout)
         
         encoder_layer = nn.TransformerEncoderLayer(
@@ -57,7 +63,7 @@ class ResTranOCR(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=transformer_layers)
         
-        # 5. Prediction Head
+        # 6. Prediction Head
         # self.head = nn.Linear(self.cnn_channels, num_classes)
         self.ctc_head = CTCHead(
             in_channels=self.cnn_channels,
@@ -67,26 +73,12 @@ class ResTranOCR(nn.Module):
             dropout=ctc_dropout
         )
 
-        # 6. Upsampler
-        # self.upsampler = nn.Sequential(
-        #     nn.Conv2d(3, 16, kernel_size=3, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(16, 3, kernel_size=3, padding=1),
-        #     nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        # )
         # 7. Feature Refiner
         self.feature_refiner = nn.Sequential(
             ResBlock(self.cnn_channels),
             ResBlock(self.cnn_channels),
             MultiHeadCA(self.cnn_channels)
         )
-        # # 8. SR Backbone
-        # self.sr_module = StackedSRNet(
-        #     in_channels=3, 
-        #     num_features= 64,
-        #     num_blocks= 16,     
-        #     target_size=(64, 256)
-        # )
 
     def forward(self, x: torch.Tensor, return_sr: bool = False) -> torch.Tensor:
         """
@@ -106,14 +98,15 @@ class ResTranOCR(nn.Module):
             theta = self.stn(x_flat)  # [B*F, 2, 3]
             grid = F.affine_grid(theta, x_flat.size(), align_corners=False)
             x_aligned = F.grid_sample(x_flat, grid, align_corners=False)
-            # x_aligned = x_aligned.view(b, f, c, h, w)
         else:
             x_aligned = x_flat
         
-        # x_hr = self.sr_module(x_aligned)  # Apply Super-Resolution
-        # x_aligned = x_hr
-
-        features = self.backbone(x_aligned)  # [B*F, 512, 1, W']
+        features = self.backbone(x_aligned)  # [B*F, 512, H', W']
+        
+        # 1. Spatial Refinement with TBSRN
+        if self.use_tbsrn:
+            features = self.tbsrn(features)
+            
         features = self.feature_refiner(features)
         fused = self.fusion(features, self.num_frames) # [B, 512, 1, W']
 
@@ -127,6 +120,5 @@ class ResTranOCR(nn.Module):
         
         out = self.ctc_head(seq_out)  
         if return_sr:
-            # return out.log_softmax(2), x_hr
             return out.log_softmax(2), None
         return out.log_softmax(2)
