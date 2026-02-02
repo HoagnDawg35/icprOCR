@@ -39,7 +39,9 @@ class TrainerDistill:
             
     def _init_training_components(self):
         self.criterion = nn.CTCLoss(blank=0, zero_infinity=True)
-        self.distill_loss_fn = nn.MSELoss() # L2 Loss
+        self.distill_L2_loss_fn = nn.MSELoss() # L2 Loss
+        self.kd_loss_fn = nn.KLDivLoss(reduction="batchmean")
+
         
         self.optimizer = optim.AdamW(
             self.student_model.parameters(),
@@ -125,7 +127,7 @@ class TrainerDistill:
             with autocast('cuda'):
                 # 1. Teacher Forward (HR)
                 with torch.no_grad():
-                    _, teacher_feats_dict = self.teacher_model(hr_images, return_feats=True)
+                    teacher_logits, teacher_feats_dict = self.teacher_model(hr_images, return_feats=True)
                     teacher_feat = teacher_feats_dict['transformer_out'] # [B, T', C]
                 
                 # 2. Student Forward (LR)
@@ -140,10 +142,29 @@ class TrainerDistill:
                 
                 # Distillation Loss (L2)
                 # Ensure shapes match
-                loss_distill = self.distill_loss_fn(student_feat, teacher_feat)
-                
-                w_distill = getattr(self.config, 'distill_weight', 1.0)
-                total_loss = loss_ctc + (w_distill * loss_distill)
+                # loss_distill = self.distill_loss_fn(student_feat, teacher_feat)
+
+                student_feat_n = F.normalize(student_feat, dim=-1)
+                teacher_feat_n = F.normalize(teacher_feat, dim=-1)
+                loss_L2 = self.distill_L2_loss_fn(student_feat_n, teacher_feat_n)
+
+                # ==================================================
+                # with torch.no_grad():
+                #     teacher_logits, teacher_feats_dict = self.teacher_model(hr_images, return_feats=True)
+
+                T = getattr(self.config, 'distill_temp', 4.0)
+
+                loss_KL = self.kd_loss_fn(
+                    F.log_softmax(student_logits / T, dim=2),
+                    F.softmax(teacher_logits / T, dim=2)
+                ) * (T * T)
+                # ==================================================
+
+
+                w_KL = getattr(self.config, 'KL_weight', 1.0)
+                w_L2 = getattr(self.config, 'L2_weight', 1.0)
+
+                total_loss = loss_ctc + (w_KL * loss_KL) + (w_L2 * loss_L2)
 
             self.scaler.scale(total_loss).backward()
             self.scaler.unscale_(self.optimizer)
@@ -157,14 +178,25 @@ class TrainerDistill:
                 self.scheduler.step()
             
             epoch_loss += total_loss.item()
-            epoch_distill_loss += loss_distill.item()
+
+            # epoch_distill_loss += loss_distill.item()
+            epoch_distill_loss += (loss_KL.item() + loss_L2.item())
+
+            
+            # pbar.set_postfix(
+            #     ctc=f"{loss_ctc.item():.3f}", 
+            #     distill=f"{loss_distill.item():.4f}",
+            #     lr=f"{self.scheduler.get_last_lr()[0]:.2e}"
+            # )        
             
             pbar.set_postfix(
-                ctc=f"{loss_ctc.item():.3f}", 
-                distill=f"{loss_distill.item():.4f}",
+                ctc=f"{loss_ctc.item():.3f}",
+                kl=f"{loss_KL.item():.3f}",
+                l2=f"{loss_L2.item():.3f}",
                 lr=f"{self.scheduler.get_last_lr()[0]:.2e}"
-            )        
-            
+            )
+
+
         return epoch_loss / len(self.train_loader)
 
     def validate(self) -> Tuple[Dict[str, float], List[str]]:

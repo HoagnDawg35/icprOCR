@@ -26,7 +26,10 @@ class Config:
     # Distillation Config
     student_model_type: Optional[str] = None
     teacher_checkpoint: Optional[str] = None
-    distill_weight: float = 1.0
+    # distill_weight: float = 1.0
+    KL_weight: float = 1.0              
+    L2_weight: float = 1.0              
+    distill_temp: float = 4.0  
     distill_layer: str = "transformer"
     clean_hr_guided: bool = False
     

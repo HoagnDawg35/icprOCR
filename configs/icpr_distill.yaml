@@ -4,14 +4,16 @@
 # Experiment tracking
 model_type: "restran" 
 student_model_type: "restran_distill" # Use the new model class with feature return
-experiment_name: "restran_distill_l2"
+experiment_name: "restran_distill_KLDiv_L2_0.5"
 augmentation_level: "full"  
 use_stn: true 
 clean_hr_guided: true # New flag to return clean HR images for teacher
 
 # Distillation
-teacher_checkpoint: "results/hr_baseline_v1.pth"
-distill_weight: 1.0
+teacher_checkpoint: "/results/restran_hr_teacher_best.pth"
+# distill_weight: 1.0 # λ
+KL_weight: 1.0
+L2_weight: 0.5
 distill_layer: "transformer" # Option: transformer, backbone
 
 # Data paths
