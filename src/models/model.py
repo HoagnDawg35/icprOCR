@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from src.models.heads import CTCHead
 from src.models.backbones import ResNetFeatureExtractor, ConvNeXtFeatureExtractor
 from src.models.necks import STNBlock, AttentionFusion, PositionalEncoding, BiFPNFusion, TemporalConvFusion, MultiHeadCA, ResBlock, Upsampler, TBSRNBlock
-# from src.models.model_sr import StackedSRNet
+from src.models.model_sr import StackedSRNet
 
 class ResTranOCR(nn.Module):
     """
@@ -42,9 +42,24 @@ class ResTranOCR(nn.Module):
         #     pretrained=False,
         # )
         
+        
         # 3. TBSRN (Transformer-Based Super-Resolution Network) [Optional]
         if self.use_tbsrn:
-            self.tbsrn = TBSRNBlock(channels=self.cnn_channels)
+            # Feature-level TBSRN (as originally in code)
+            self.tbsrn_neck = TBSRNBlock(channels=self.cnn_channels)
+            
+            # Image-level Super-Resolution Network
+            sr_config = sr_config or {}
+            self.sr_net = StackedSRNet(
+                in_channels=3,
+                num_blocks=sr_config.get('num_blocks', 4),
+                channels=sr_config.get('channels', 64),
+                scale_factor=sr_config.get('scale_factor', 2),
+                num_heads=sr_config.get('num_heads', 4),
+                dropout=sr_config.get('dropout', 0.1),
+                use_pam=sr_config.get('use_pam', True),
+                use_cam=sr_config.get('use_cam', True)
+            )
 
         # 4. Attention Fusion
         self.fusion = AttentionFusion(channels=self.cnn_channels)
@@ -103,9 +118,10 @@ class ResTranOCR(nn.Module):
         
         features = self.backbone(x_aligned)  # [B*F, 512, H', W']
         
+        
         # 1. Spatial Refinement with TBSRN
         if self.use_tbsrn:
-            features = self.tbsrn(features)
+            features = self.tbsrn_neck(features)
             
         features = self.feature_refiner(features)
         fused = self.fusion(features, self.num_frames) # [B, 512, 1, W']
@@ -119,6 +135,11 @@ class ResTranOCR(nn.Module):
         seq_out = self.transformer(seq_input) # [B, W', C]
         
         out = self.ctc_head(seq_out)  
-        if return_sr:
-            return out.log_softmax(2), None
+        
+        if return_sr and self.use_tbsrn:
+            # Apply SR to input frames
+            # Reshape x to [B*F, C, H, W] if not already
+            sr_out = self.sr_net(x_flat) # [B*F, 3, H*S, W*S]
+            return out.log_softmax(2), sr_out
+            
         return out.log_softmax(2)

@@ -22,6 +22,8 @@ class Config:
     experiment_name: str = "restran"
     augmentation_level: str = "full"
     use_stn: bool = True
+    use_tbsrn: bool = False
+    hr_guided: bool = False
     
     # Distillation Config
     student_model_type: Optional[str] = None
@@ -63,6 +65,15 @@ class Config:
     transformer_ff_dim: int = 2048
     transformer_dropout: float = 0.1
     ctc_head: CTCHeadConfig = field(default_factory=CTCHeadConfig)
+    sr_config: dict = field(default_factory=lambda: {
+        'num_blocks': 2,    # Reduced from 4
+        'channels': 32,      # Reduced from 64
+        'scale_factor': 2,
+        'num_heads': 2,      # Reduced from 4
+        'dropout': 0.1,
+        'use_pam': True,
+        'use_cam': True
+    })
     
     device: torch.device = field(default_factory=lambda: torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     output_dir: str = "results"

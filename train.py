@@ -100,6 +100,12 @@ def parse_args() -> argparse.Namespace:
     )
     
     parser.add_argument(
+        "--use-tbsrn",
+        action="store_true",
+        help="Enable TBSRN Super-Resolution"
+    )
+    
+    parser.add_argument(
         "--hidden-size",
         type=int,
         default=None,
@@ -118,6 +124,25 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Number of transformer encoder layers (default: from config)"
+    )
+
+    parser.add_argument(
+        "--hr-guided",
+        action="store_true",
+        help="Use HR images as guidance/labels"
+    )
+
+    parser.add_argument(
+        "--teacher-checkpoint",
+        type=str,
+        default=None,
+        help="Path to teacher checkpoint for distillation"
+    )
+
+    parser.add_argument(
+        "--hr-only",
+        action="store_true",
+        help="Train only on high-resolution images"
     )
     
     # ========== AUGMENTATION ==========
@@ -166,9 +191,11 @@ def load_model(config):
             transformer_ff_dim=config.transformer_ff_dim,
             dropout=config.transformer_dropout,
             use_stn=config.use_stn,
+            use_tbsrn=config.use_tbsrn,
             ctc_mid_channels=config.ctc_head.mid_channels,
             ctc_dropout=config.ctc_head.dropout,
             ctc_return_feats=config.ctc_head.return_feats,
+            sr_config=config.sr_config,
         )
     else:  # crnn
         model = CRNN(
@@ -234,6 +261,8 @@ def mode_train(args, config):
         'seed': config.seed,
         'augmentation_level': config.augmentation_level,
         'num_frames': config.num_frames,
+        'hr_guided': config.hr_guided,
+        'hr_as_clean': config.use_tbsrn, # return clean HR if using TBSRN SR
     }
     
     # Create datasets
@@ -449,6 +478,16 @@ def main():
     if args.no_stn:
         config.use_stn = False
     
+    if args.use_tbsrn:
+        config.use_tbsrn = True
+        config.hr_guided = True # Auto-enable HR guidance for SR labels
+    
+    if args.hr_guided:
+        config.hr_guided = True
+        
+    if args.teacher_checkpoint:
+        config.teacher_checkpoint = args.teacher_checkpoint
+        
     config.OUTPUT_DIR = args.output_dir
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     
@@ -463,6 +502,8 @@ def main():
     print(f"EXPERIMENT      : {config.experiment_name}")
     print(f"MODEL           : {config.model_type}")
     print(f"USE_STN         : {config.use_stn}")
+    print(f"USE_TBSRN       : {config.use_tbsrn}")
+    print(f"HR_GUIDED       : {config.hr_guided}")
     print(f"DATA_ROOT       : {config.data_root}")
     print(f"EPOCHS          : {config.epochs}")
     print(f"BATCH_SIZE      : {config.batch_size}")

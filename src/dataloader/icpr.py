@@ -40,6 +40,7 @@ class ICPR_LPR_Datatset(Dataset):
         num_frames: int = 5,
         train_hr_only: bool = False,
         hr_guided: bool = False,
+        hr_as_clean: bool = False,
     ):
         """
         Args:
@@ -71,6 +72,7 @@ class ICPR_LPR_Datatset(Dataset):
         self.num_frames = num_frames
         self.train_hr_only = train_hr_only
         self.hr_guided = hr_guided
+        self.hr_as_clean = hr_as_clean
         if mode == 'train':
             # Training: apply augmentation on the fly
             if augmentation_level == "light":
@@ -258,7 +260,8 @@ class ICPR_LPR_Datatset(Dataset):
         
         if is_guided:
             lr_images = self._load_sequence(item['lr_paths'], augment=True, degrade=False)
-            hr_images = self._load_sequence(item['hr_paths'], augment=True, degrade=True) # HR images degraded to synthetic LR
+            # If hr_as_clean is True, don't degrade HR images (useful for SR labels)
+            hr_images = self._load_sequence(item['hr_paths'], augment=True, degrade=not self.hr_as_clean)
             
             label = item['label']
             target = [self.char2idx[c] for c in label if c in self.char2idx]

@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.utils import seed_everything, char_level_voting, decode_with_confidence
+from src.models.losses import SRMetricLoss
 
 
 class Trainer:
@@ -37,7 +38,10 @@ class Trainer:
             self._init_training_components()
     def _init_training_components(self):
         self.criterion = nn.CTCLoss(blank=0, zero_infinity=True)
-        # self.sr_loss_func = SRMetricLoss(device=self.device)
+        if getattr(self.config, 'use_tbsrn', False):
+            self.sr_loss_func = SRMetricLoss(device=self.device)
+        else:
+            self.sr_loss_func = None
         self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
@@ -73,10 +77,12 @@ class Trainer:
         
         for batch in pbar:
             if len(batch) == 6:
-                images, targets, target_lengths, _, _, hr_targets = batch
+                # Based on icpr.py: lr_images, hr_images, targets, target_lengths, labels_text, track_ids
+                images, hr_images, targets, target_lengths, _, _ = batch
+                hr_targets = hr_images 
             else:
-                 images, targets, target_lengths, _, _ = batch
-                 hr_targets = None # No HR targets in standard mode
+                images, targets, target_lengths, _, _ = batch
+                hr_targets = None
             
             images = images.to(self.device)
             targets = targets.to(self.device)
@@ -86,8 +92,12 @@ class Trainer:
             self.optimizer.zero_grad(set_to_none=True)
             
             with autocast('cuda'):
-                preds = self.model(images)
-                # preds, sr_out = self.model(images, return_sr=True)
+                if getattr(self.config, 'use_tbsrn', False):
+                    preds, sr_out = self.model(images, return_sr=True)
+                else:
+                    preds = self.model(images)
+                    sr_out = None
+
                 preds_permuted = preds.permute(1, 0, 2)
                 input_lengths = torch.full(
                     size=(images.size(0),),
@@ -95,11 +105,21 @@ class Trainer:
                     dtype=torch.long
                 )
                 loss_ctc = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
-                # loss_sr = self.criterion_sr(sr_out, hr_targets)
-
-                # mse, perceptual, edge = self.sr_loss_func(sr_out, hr_targets)
-                # loss_sr_total = 1.0 * mse + 0.5 * perceptual + 0.3 * edge
-                loss_sr_total = torch.tensor(0.0).to(self.device) 
+                
+                loss_sr_total = torch.tensor(0.0).to(self.device)
+                if sr_out is not None and hr_targets is not None:
+                    # Flatten HR targets to match sr_out [B*F, C, H*S, W*S]
+                    # hr_targets: [B, F, C, H_hr, W_hr] -> [B*F, C, H_hr, W_hr]
+                    b, f, c, h, w = hr_targets.size()
+                    hr_flat = hr_targets.view(b * f, c, h, w)
+                    
+                    # Ensure same size (in case of slight mismatches)
+                    if sr_out.shape[2:] != hr_flat.shape[2:]:
+                        hr_flat = F.interpolate(hr_flat, size=sr_out.shape[2:], mode='bilinear', align_corners=False)
+                    
+                    mse, perceptual, edge = self.sr_loss_func(sr_out, hr_flat)
+                    loss_sr_total = 1.0 * mse + 0.5 * perceptual + 0.3 * edge
+                
                 total_loss = loss_ctc + 0.5 * loss_sr_total
 
 
@@ -147,8 +167,12 @@ class Trainer:
                 targets = targets.to(self.device)
                 if hr_targets is not None:
                      hr_targets = hr_targets.to(self.device)
-                # preds, sr_out = self.model(images, return_sr=True)
-                preds = self.model(images)
+                
+                if getattr(self.config, 'use_tbsrn', False):
+                    preds, sr_out = self.model(images, return_sr=True)
+                else:
+                    preds = self.model(images)
+                    sr_out = None
                 input_lengths = torch.full(
                     (images.size(0),),
                     preds.size(1),
@@ -160,9 +184,15 @@ class Trainer:
                     input_lengths,
                     target_lengths
                 )
-                # mse, perceptual, edge = self.sr_loss_func(sr_out, hr_targets)
-                # loss_sr_total = 1.0 * mse + 0.1 * perceptual + 0.1 * edge
                 loss_sr_total = torch.tensor(0.0).to(self.device)
+                if sr_out is not None and hr_targets is not None:
+                    b, f, c, h, w = hr_targets.size()
+                    hr_flat = hr_targets.view(b * f, c, h, w)
+                    if sr_out.shape[2:] != hr_flat.shape[2:]:
+                        hr_flat = F.interpolate(hr_flat, size=sr_out.shape[2:], mode='bilinear', align_corners=False)
+                    mse, perceptual, edge = self.sr_loss_func(sr_out, hr_flat)
+                    loss_sr_total = 1.0 * mse + 0.5 * perceptual + 0.3 * edge
+                
                 loss = loss + 0.5 * loss_sr_total
                 val_loss += loss.item() * images.size(0)
 
