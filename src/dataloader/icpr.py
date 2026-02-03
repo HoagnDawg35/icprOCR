@@ -197,26 +197,9 @@ class ICPR_LPR_Datatset(Dataset):
                     glob.glob(os.path.join(track_path, "hr-*.jpg"))
                 )
                 
-                # Real LR samples
-                if not (self.mode == 'train' and (self.train_hr_only or self.hr_guided)):
-                    self.samples.append({
-                        'paths': lr_files,
-                        'label': label,
-                        'is_synthetic': False,
-                        'track_id': track_id
-                    })
-                
-                # Synthetic LR samples (only in training mode)
-                if self.mode == 'train' and not self.hr_guided:
-                    self.samples.append({
-                        'paths': hr_files,
-                        'label': label,
-                        'is_synthetic': True,
-                        'track_id': track_id
-                    })
-                
-                # HR Guided: return both LR and HR
+                # Path selection logic
                 if self.hr_guided:
+                    # HR Guided: return both LR and HR as a single item
                     self.samples.append({
                         'lr_paths': lr_files,
                         'hr_paths': hr_files,
@@ -224,6 +207,26 @@ class ICPR_LPR_Datatset(Dataset):
                         'track_id': track_id,
                         'is_guided': True
                     })
+                else:
+                    # Normal mode: Samples are either real LR or synthetic LR (separate items)
+                    
+                    # 1. Real LR samples (not added if train_hr_only is True)
+                    if not (self.mode == 'train' and self.train_hr_only):
+                        self.samples.append({
+                            'paths': lr_files,
+                            'label': label,
+                            'is_synthetic': False,
+                            'track_id': track_id
+                        })
+                    
+                    # 2. Synthetic LR samples (only in training mode)
+                    if self.mode == 'train':
+                        self.samples.append({
+                            'paths': hr_files,
+                            'label': label,
+                            'is_synthetic': True,
+                            'track_id': track_id
+                        })
             except Exception:
                 pass
 
