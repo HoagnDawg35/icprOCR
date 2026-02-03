@@ -16,22 +16,47 @@ import seaborn as sns
 from src.models import ResTranOCR
 from src.dataloader.icpr import ICPR_LPR_Datatset
 from src.utils.post_proc import decode_with_confidence
+from configs.config import load_config_from_yaml
 
 def denormalize(tensor):
     """Reverses the normalization: img * 0.5 + 0.5"""
     return tensor * 0.5 + 0.5
 
-def plot_error(track_id, frames, gt_text, pred_text, conf, save_path):
-    """Plots 5 frames and labels for a misrecognized track."""
-    fig, axes = plt.subplots(1, 5, figsize=(15, 3))
+def calculate_psnr(pred, gt):
+    """Calculates PSNR between two tensors [C, H, W] or [B, C, H, W]."""
+    mse = torch.mean((pred - gt) ** 2)
+    if mse == 0:
+        return float('inf')
+    # Assuming pixels are in range [0, 1] after denormalization
+    max_pixel = 1.0
+    psnr = 20 * torch.log10(max_pixel / torch.sqrt(mse))
+    return psnr.item()
+
+def plot_error(track_id, frames, gt_text, pred_text, conf, save_path, sr_frames=None):
+    """Plots original frames and optionally SR frames for a misrecognized track."""
+    num_rows = 2 if sr_frames is not None else 1
+    fig, axes = plt.subplots(num_rows, 5, figsize=(15, 3 * num_rows))
     plt.suptitle(f"Track: {track_id} | GT: {gt_text} | Pred: {pred_text} ({conf:.2f})", color='red', fontsize=14)
     
+    # Ensure axes is always 2D
+    if num_rows == 1:
+        axes = np.expand_dims(axes, axis=0)
+
     for i in range(5):
+        # Plot Original
         img = denormalize(frames[i]).permute(1, 2, 0).cpu().numpy()
         img = np.clip(img, 0, 1)
-        axes[i].imshow(img)
-        axes[i].axis('off')
-        axes[i].set_title(f"Frame {i+1}")
+        axes[0, i].imshow(img)
+        axes[0, i].axis('off')
+        axes[0, i].set_title(f"Original F{i+1}")
+
+        # Plot SR if available
+        if sr_frames is not None:
+            sr_img = denormalize(sr_frames[i]).permute(1, 2, 0).cpu().numpy()
+            sr_img = np.clip(sr_img, 0, 1)
+            axes[1, i].imshow(sr_img)
+            axes[1, i].axis('off')
+            axes[1, i].set_title(f"SR F{i+1}")
         
     plt.tight_layout()
     plt.savefig(save_path)
@@ -273,23 +298,16 @@ def main():
     print(f"🚀 Starting error scanning with checkpoint: {args.checkpoint}")
 
     # 1. Load Config
-    with open(args.config, 'r') as f:
-        config_dict = yaml.safe_load(f)
-    
-    class Config:
-        def __init__(self, **entries):
-            self.__dict__.update(entries)
-            
-    config = Config(**config_dict)
+    config = load_config_from_yaml(args.config)
     config.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"✅ Device: {config.device}")
     
     # 2. Setup Chars
     chars = config.chars
-    idx2char = {i + 1: char for i, char in enumerate(chars)}
+    idx2char = config.idx2char
     idx2char[0] = "" # Blank
-    char2idx = {char: i + 1 for i, char in enumerate(chars)}
-    num_classes = len(chars) + 1
+    char2idx = config.char2idx
+    num_classes = config.num_classes
 
     # 2.b Load Ground Truth JSON
     gt_data = {}
@@ -307,21 +325,27 @@ def main():
         for c2 in all_chars_with_special:
             cm[c1][c2] = 0
 
-    # 3. Load Dataset
-    print("📂 Loading dataset...")
-    val_dataset = ICPR_LPR_Datatset(
-        root_dir=config.data_root,
-        mode='val',
-        img_height=config.img_height,
-        img_width=config.img_width,
-        char2idx=char2idx,
-        val_split_file=config.val_split_file,
-        num_frames=config.num_frames
-    )
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False)
-    print(f"✅ Loaded {len(val_dataset)} validation samples.")
+    # 3. Load Checkpoint first to detect architecture
+    if not os.path.exists(args.checkpoint):
+        print(f"❌ Checkpoint not found at {args.checkpoint}")
+        return
 
+    print(f"📥 Loading checkpoint from {args.checkpoint}...")
+    checkpoint = torch.load(args.checkpoint, map_location=config.device, weights_only=False)
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+    
     # 4. Initialize Model (ResTranOCR)
+    # Auto-detect SR from checkpoint
+    use_tbsrn = getattr(config, 'use_tbsrn', False)
+    has_sr_keys = any(k.startswith('tbsrn_neck') or k.startswith('sr_net') for k in state_dict.keys())
+    
+    if has_sr_keys and not use_tbsrn:
+        print("💡 Auto-detected SR weights in checkpoint. Enabling SR support...")
+        use_tbsrn = True
+    elif not has_sr_keys and use_tbsrn:
+        print("⚠️ SR enabled in config but not found in checkpoint. Disabling SR support...")
+        use_tbsrn = False
+
     model = ResTranOCR(
         num_classes=num_classes,
         num_frames=config.num_frames,
@@ -330,24 +354,41 @@ def main():
         transformer_ff_dim=config.transformer_ff_dim,
         dropout=config.transformer_dropout,
         use_stn=config.use_stn,
-        ctc_mid_channels=config.ctc_head['mid_channels'],
-        ctc_dropout=config.ctc_head['dropout'],
-        ctc_return_feats=config.ctc_head['return_feats'],
+        use_tbsrn=use_tbsrn,
+        sr_config=config.sr_config,
+        ctc_mid_channels=config.ctc_head.mid_channels,
+        ctc_dropout=config.ctc_head.dropout,
+        ctc_return_feats=config.ctc_head.return_feats,
     ).to(config.device)
 
-    # 5. Load Weight
-    if not os.path.exists(args.checkpoint):
-        print(f"❌ Checkpoint not found at {args.checkpoint}")
-        return
+    # 5. Load Dataset
+    print("📂 Loading dataset...")
+    val_dataset = ICPR_LPR_Datatset(
+        root_dir=config.data_root,
+        mode='val',
+        img_height=config.img_height,
+        img_width=config.img_width,
+        char2idx=char2idx,
+        val_split_file=config.val_split_file,
+        num_frames=config.num_frames,
+        hr_guided=use_tbsrn, # Now use_tbsrn is defined!
+        hr_as_clean=True
+    )
+    
+    collate_fn = val_dataset.collate_fn
+    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
+    print(f"✅ Loaded {len(val_dataset)} validation samples.")
 
-    print(f"📥 Loading weights from {args.checkpoint}...")
-    checkpoint = torch.load(args.checkpoint, map_location=config.device, weights_only=False)
-    if 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'])
-    else:
-        model.load_state_dict(checkpoint)
+    # 6. Load Weights
+    print("📥 Loading weights into model...")
+    msg = model.load_state_dict(state_dict, strict=False)
+    if msg.missing_keys:
+        print(f"⚠️ Missing keys: {len(msg.missing_keys)}")
+    if msg.unexpected_keys:
+        print(f"⚠️ Unexpected keys: {len(msg.unexpected_keys)}")
+    
     model.eval()
-    print("✅ Weights loaded.")
+    print("✅ Model ready.")
 
     # 6. Create Output Dir
     if args.output_dir is None:
@@ -361,15 +402,43 @@ def main():
     count = 0
     total_samples = 0
     total_errors = 0
+    psnr_scores = []
     
     with torch.no_grad():
-        for images, targets, target_lengths, labels_text, track_ids in tqdm(val_loader, desc="Scanning Errors"):
+        for batch in tqdm(val_loader, desc="Scanning Errors"):
+            # Unpack batch based on hr_guided mode
+            if len(batch) == 6:
+                images, hr_images, targets, target_lengths, labels_text, track_ids = batch
+                hr_images = hr_images.to(config.device)
+            else:
+                images, targets, target_lengths, labels_text, track_ids = batch
+                hr_images = None
+
             images = images.to(config.device)
-            preds = model(images)
+            
+            # Forward pass: request SR if enabled
+            if use_tbsrn:
+                preds, sr_out = model(images, return_sr=True)
+            else:
+                preds = model(images)
+                sr_out = None
             
             decoded = decode_with_confidence(preds, idx2char)
             pred_text, conf = decoded[0]
             track_id = track_ids[0]
+
+            # Calculate PSNR if SR available
+            if sr_out is not None and hr_images is not None:
+                # Denormalize both for PSNR [B*F, C, H, W]
+                sr_denorm = denormalize(sr_out)
+                # Reshape hr_images to match sr_out: [B, F, C, H_SR, W_SR] -> [B*F, C, H_SR, W_SR]
+                b, f, c, h, w = hr_images.shape
+                hr_flat = hr_images.view(b * f, c, h, w)
+                hr_denorm = denormalize(hr_flat)
+                
+                score = calculate_psnr(sr_denorm, hr_denorm)
+                if score != float('inf'):
+                    psnr_scores.append(score)
             
             # Prefer ground_truth.json label if available
             gt_text = gt_data.get(track_id, labels_text[0])
@@ -383,15 +452,27 @@ def main():
                 total_errors += 1
                 if count < args.max_plots:
                     save_path = os.path.join(args.output_dir, f"{track_id}_error.png")
-                    plot_error(track_id, images[0], gt_text, pred_text, conf, save_path)
+                    
+                    # Prepare SR frames for plotting if available
+                    current_sr_frames = None
+                    if sr_out is not None:
+                        # sr_out is [B*F, C, H*S, W*S]
+                        _, c, h_sr, w_sr = sr_out.shape
+                        current_sr_frames = sr_out.view(1, config.num_frames, c, h_sr, w_sr)[0]
+                    
+                    plot_error(track_id, images[0], gt_text, pred_text, conf, save_path, sr_frames=current_sr_frames)
                     count += 1
             
                 
     accuracy = (1 - total_errors / total_samples) * 100 if total_samples > 0 else 0
+    avg_psnr = np.mean(psnr_scores) if psnr_scores else 0
+    
     print(f"\n📊 Summary:")
     print(f"   - Total Samples: {total_samples}")
     print(f"   - Total Errors : {total_errors}")
     print(f"   - Val Accuracy : {accuracy:.2f}%")
+    if psnr_scores:
+        print(f"   - Avg SR PSNR  : {avg_psnr:.2f} dB")
     print(f"   - Plotted      : {count} errors to {args.output_dir}")
 
     # Plot Confusion Matrix
