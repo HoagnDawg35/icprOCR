@@ -175,6 +175,13 @@ def parse_args() -> argparse.Namespace:
         default="results",
         help="Directory to save outputs (default: results/)"
     )
+
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        default=None,
+        help="GPU ID to use (e.g., 0, 1)"
+    )
     
     return parser.parse_args()
 
@@ -488,6 +495,9 @@ def main():
     if args.teacher_checkpoint:
         config.teacher_checkpoint = args.teacher_checkpoint
         
+    if args.gpu is not None:
+        config.device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    
     config.OUTPUT_DIR = args.output_dir
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     
