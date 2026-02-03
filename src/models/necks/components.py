@@ -694,14 +694,21 @@ class TBSRNBlock(nn.Module):
         self.use_pam = use_pam
         self.use_cam = use_cam
         
-        # Multi-Head Self-Attention (MHSA) applied spatially
-        self.attn = nn.MultiheadAttention(
+        # Axial Attention: Separate attention for Width and Height to save memory
+        self.attn_h = nn.MultiheadAttention(
+            embed_dim=channels,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.attn_w = nn.MultiheadAttention(
             embed_dim=channels,
             num_heads=num_heads,
             dropout=dropout,
             batch_first=True
         )
         self.norm1 = nn.LayerNorm(channels)
+        self.norm2 = nn.LayerNorm(channels)
         
         # PAM and CAM modules
         if self.use_pam:
@@ -724,16 +731,22 @@ class TBSRNBlock(nn.Module):
         if self.use_pam:
             x = self.pam(x)
             
-        # 2. Sequential Self-Attention (MHSA)
-        # Reshape for attention: [B, C, H, W] -> [B, H*W, C]
-        x_flat = x.view(b, c, -1).permute(0, 2, 1)
-        x_norm = self.norm1(x_flat)
-        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
-        x_flat = x_flat + attn_out
+        # 2. Sequential Axial Self-Attention
+        # --- Height Attention ---
+        # Reshape for height attention: [B, C, H, W] -> [B*W, H, C]
+        x_h = x.permute(0, 3, 2, 1).contiguous().view(b * w, h, c)
+        x_h_norm = self.norm1(x_h)
+        attn_h_out, _ = self.attn_h(x_h_norm, x_h_norm, x_h_norm)
+        x_h = x_h + attn_h_out
+        x = x_h.view(b, w, h, c).permute(0, 3, 2, 1).contiguous() # back to [B, C, H, W]
         
-        # 3. Content Refinement (CAM)
-        # Reshape back: [B, H*W, C] -> [B, C, H, W]
-        x = x_flat.permute(0, 2, 1).view(b, c, h, w)
+        # --- Width Attention ---
+        # Reshape for width attention: [B, C, H, W] -> [B*H, W, C]
+        x_w = x.permute(0, 2, 3, 1).contiguous().view(b * h, w, c)
+        x_w_norm = self.norm2(x_w)
+        attn_w_out, _ = self.attn_w(x_w_norm, x_w_norm, x_w_norm)
+        x_w = x_w + attn_w_out
+        x = x_w.view(b, h, w, c).permute(0, 3, 1, 2).contiguous() # back to [B, C, H, W]
         if self.use_cam:
             x = self.cam(x)
             
