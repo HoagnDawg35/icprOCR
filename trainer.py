@@ -163,7 +163,8 @@ class Trainer:
         with torch.no_grad():
             for batch in self.val_loader:
                 if len(batch) == 6:
-                    images, targets, target_lengths, labels_text, track_ids, hr_targets = batch
+                    # Match icpr.py: lr_images, hr_images, targets, target_lengths, labels_text, track_ids
+                    images, hr_targets, targets, target_lengths, labels_text, track_ids = batch
                 else:
                     images, targets, target_lengths, labels_text, track_ids = batch
                     hr_targets = None
