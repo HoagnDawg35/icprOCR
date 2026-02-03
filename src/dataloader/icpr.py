@@ -215,8 +215,8 @@ class ICPR_LPR_Datatset(Dataset):
                         'track_id': track_id
                     })
                 
-                # HR Guided training: return both LR and HR
-                if self.mode == 'train' and self.hr_guided:
+                # HR Guided: return both LR and HR
+                if self.hr_guided:
                     self.samples.append({
                         'lr_paths': lr_files,
                         'hr_paths': hr_files,
@@ -259,9 +259,20 @@ class ICPR_LPR_Datatset(Dataset):
         is_guided = item.get('is_guided', False)
         
         if is_guided:
-            lr_images = self._load_sequence(item['lr_paths'], augment=True, degrade=False)
-            # If hr_as_clean is True, don't degrade HR images (useful for SR labels)
-            hr_images = self._load_sequence(item['hr_paths'], augment=True, degrade=not self.hr_as_clean)
+            lr_images = self._load_sequence(item['lr_paths'], augment=(self.mode == 'train'), degrade=False)
+            
+            # Use original resolution or scaled for HR if provided in config
+            h_hr = self.img_height
+            w_hr = self.img_width
+            # If we are in HR guided mode, we usually want HR at full scale or specific scale
+            # But the transforms will resize it. We'll handle scaling in _load_sequence if needed.
+            
+            hr_images = self._load_sequence(
+                item['hr_paths'], 
+                augment=(self.mode == 'train'), 
+                degrade=not self.hr_as_clean,
+                is_hr=True
+            )
             
             label = item['label']
             target = [self.char2idx[c] for c in label if c in self.char2idx]
@@ -289,8 +300,12 @@ class ICPR_LPR_Datatset(Dataset):
             
         return images_tensor, torch.tensor(target, dtype=torch.long), target_len, label, track_id
 
-    def _load_sequence(self, img_paths: List[str], augment: bool = False, degrade: bool = False) -> torch.Tensor:
-        """Helper to load and preprocess a sequence of images."""
+    def _load_sequence(self, img_paths: List[str], augment: bool = False, degrade: bool = False, is_hr: bool = False) -> torch.Tensor:
+        """Helper to load and preprocess a sequence of images.
+        
+        Args:
+            is_hr: If True and using SR, apply scaled resizing.
+        """
         if len(img_paths) >= self.num_frames:
             indices = torch.linspace(0, len(img_paths)-1, self.num_frames).long()
             selected_paths = [img_paths[i] for i in indices]
@@ -305,7 +320,16 @@ class ICPR_LPR_Datatset(Dataset):
             if degrade and self.degrade:
                 image = self.degrade(image=image)['image']
             
-            transform = self.transform if augment else get_val_transforms(self.img_height, self.img_width)
+            h, w = self.img_height, self.img_width
+            if is_hr:
+                # Multiply by scale factor if we have it (default to 1)
+                # This could be more formally passed in, but we'll assume 2x for now if it's HR
+                # Actually, better to let the model define the scale. 
+                # For validation PSNR, we'll resize to (H*2, W*2) if it's HR.
+                h *= 2
+                w *= 2
+
+            transform = self.transform if augment else get_val_transforms(h, w)
             image = transform(image=image)['image']
             images_list.append(image)
 

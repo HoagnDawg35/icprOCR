@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from src.models.necks.components import TBSRNBlock, Upsampler
+import torch.nn.functional as F
+from src.models.necks.components import TBSRNBlock, Upsampler, STNBlock
 
 class StackedSRNet(nn.Module):
     """
@@ -16,9 +17,14 @@ class StackedSRNet(nn.Module):
         num_heads: int = 4,
         dropout: float = 0.1,
         use_pam: bool = True,
-        use_cam: bool = True
+        use_cam: bool = True,
+        use_stn: bool = True
     ):
         super().__init__()
+        self.scale_factor = scale_factor
+        
+        # Spatial Transformer Network for rectification
+        self.stn = STNBlock(in_channels) if use_stn else None
         
         # Initial feature extraction (Lightweight)
         self.head = nn.Sequential(
@@ -59,18 +65,33 @@ class StackedSRNet(nn.Module):
         Returns:
             High-resolution output [B, 3, H*scale, W*scale]
         """
-        # Initial features
+        identity = x
+        
+        # 1. Spatial alignment/rectification
+        if self.stn is not None:
+            theta = self.stn(x)
+            grid = F.affine_grid(theta, x.size(), align_corners=True)
+            x = F.grid_sample(x, grid, align_corners=True)
+
+        # 2. Initial features
         feat = self.head(x)
         
-        # Process through TBSRN blocks
+        # 3. Stack of TBSRN blocks with global skip connection
+        res_feat = feat
         for block in self.blocks:
             feat = block(feat)
+        feat = feat + res_feat
             
-        # Refine and upsample
+        # 4. Refine and upsample
         feat = self.refine(feat)
         feat = self.upsampler(feat)
         
-        # Reconstruct RGB
+        # 5. Reconstruct RGB
         out = self.tail(feat)
+        
+        # 6. Global Residual Learning (Add upsampled input)
+        # We upsample the potentially aligned input x
+        identity_up = F.interpolate(x, scale_factor=self.scale_factor, mode='bicubic', align_corners=True)
+        out = out + identity_up
         
         return out
