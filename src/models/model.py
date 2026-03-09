@@ -126,7 +126,8 @@ class ResTranOCR(nn.Module):
         seq_out = self.transformer(seq_input) # [B, W', C]
         
         out = self.ctc_head(seq_out)  
-        if return_sr:
-            # return out.log_softmax(2), x_hr
-            return out.log_softmax(2), None
-        return out.log_softmax(2)
+        
+        # log_softmax for CTC
+        logits = out.log_softmax(2)
+
+        return logits

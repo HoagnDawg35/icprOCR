@@ -37,6 +37,7 @@ class Trainer:
             self._init_training_components()
     def _init_training_components(self):
         self.criterion = nn.CTCLoss(blank=0, zero_infinity=True)
+        # self.criterion_supcon = nn.SupConLoss(temperature=0.07)
         # self.sr_loss_func = SRMetricLoss(device=self.device)
         self.optimizer = optim.AdamW(
             self.model.parameters(),
@@ -88,6 +89,7 @@ class Trainer:
                     dtype=torch.long
                 )
                 loss_ctc = self.criterion(preds_permuted, targets, input_lengths, target_lengths)
+                # loss_supcon = self.criterion_supcon(preds_permuted, targets, input_lengths, target_lengths)
                 # loss_sr = self.criterion_sr(sr_out, hr_targets)
 
                 # mse, perceptual, edge = self.sr_loss_func(sr_out, hr_targets)
