@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from src.dataloader import get_train_transforms
+from src.dataloader.transforms import get_train_transforms
 import torch
 
 def visualize_augmentations(image_path, num_samples=10, output_path="aug_visualization.png"):

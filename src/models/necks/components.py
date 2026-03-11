@@ -75,6 +75,7 @@ class ResBlock(nn.Module):
         self.conv1 = nn.Conv2d(num_features, num_features, 3, padding=1)
         self.conv2 = nn.Conv2d(num_features, num_features, 3, padding=1)
         self.calayer = CALayer(num_features, reduction=16) # Có thể thay bằng Multi-head CA
+        # self.mhcalayer = MultiHeadCA(num_heads=8,)
         self.relu = nn.ReLU(inplace=True)
         self.res_scale = res_scale
 
@@ -594,6 +595,7 @@ class BiFPNFusion(nn.Module):
         fused_final = self._fast_fuse(out, self.w_final)
 
         return fused_final
+    
 class PositionalEncoding(nn.Module):
     """
     Injects information about the relative or absolute position of the tokens in the sequence.
@@ -620,3 +622,4 @@ class PositionalEncoding(nn.Module):
         """
         x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
+    

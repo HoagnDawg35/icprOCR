@@ -9,7 +9,7 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.utils import seed_everything, char_level_voting, decode_with_confidence, SRMetricLoss
+from src.utils import seed_everything, char_level_voting, decode_with_confidence # SRMetricLoss
 
 
 class Trainer:
