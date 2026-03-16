@@ -1,5 +1,5 @@
 import math
-
+import timm 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -69,6 +69,13 @@ class CALayer(nn.Module):
         y = self.conv_du(y)
         return x * y
     
+class SwinTrans(nn.Module):
+    def __init__(self, num_features):
+        super().__init__()
+        
+
+    def forward(self, x):
+
 class ResBlock(nn.Module):
     def __init__(self, num_features, res_scale=0.1):
         super().__init__()
@@ -143,6 +150,14 @@ class AttentionFusion(nn.Module):
             nn.Conv2d(channels // 8, 1, kernel_size=1)
         )
 
+        self.temporal_conv = nn.Conv3d(
+            channels,
+            channels,
+            kernel_size=(3,1,1),
+            padding=(1,0,0),
+            groups=channels
+        )
+
     def forward(self, x: torch.Tensor, num_frames: int) -> torch.Tensor:
         """
         Args:
@@ -156,12 +171,19 @@ class AttentionFusion(nn.Module):
         # Reshape to [Batch, Frames, C, H, W]
         x_view = x.view(batch_size, num_frames, c, h, w)
         
+        # temporal conv (video OCR)
+        # x_temp = x_view.permute(0,2,1,3,4)  # [B,C,F,H,W]
+        # x_temp = self.temporal_conv(x_temp)
+        # x_temp = x_temp.permute(0,2,1,3,4)  # [B,F,C,H,W]
+        # x_temp = x_temp.reshape(total_frames, c, h, w)
+
         # Calculate attention scores: [Batch, Frames, 1, H, W]
         scores = self.score_net(x).view(batch_size, num_frames, 1, h, w)
         weights = F.softmax(scores, dim=1)  # Normalize scores across frames
 
         # Weighted sum fusion
         fused_features = torch.sum(x_view * weights, dim=1)
+        
         return fused_features
 
 class CrossFrameAttentionFusion(nn.Module):
@@ -620,3 +642,44 @@ class PositionalEncoding(nn.Module):
         """
         x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
+
+class FrameAttentionFusion(nn.Module):
+    def __init__(self, channels, num_heads=4):
+        super().__init__()
+
+        self.attn = nn.MultiheadAttention(
+            embed_dim=channels,
+            num_heads=num_heads,
+            batch_first=True
+        )
+
+        self.norm = nn.LayerNorm(channels)
+
+    def forward(self, x, num_frames):
+
+        total_frames, c, h, w = x.size()
+        batch = total_frames // num_frames
+
+        x_view = x.view(batch, num_frames, c, h, w)
+
+        # baseline feature
+        baseline = x_view.mean(dim=1)  # [B,C,H,W]
+
+        # reshape for attention
+        x_view = x_view.squeeze(3)          # [B,F,C,W]
+        x_view = x_view.permute(0,3,1,2)    # [B,W,F,C]
+
+        B,W,F,C = x_view.shape
+
+        x_view = x_view.reshape(B*W, F, C)
+
+        attn_out,_ = self.attn(x_view, x_view, x_view)
+
+        attn_out = attn_out.mean(dim=1)
+
+        attn_out = attn_out.view(B,W,C).permute(0,2,1).unsqueeze(2)
+
+        # residual
+        fused = baseline + attn_out
+
+        return fused

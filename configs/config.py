@@ -36,7 +36,7 @@ class Config:
     chars: str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     
     # Training hyperparameters
-    batch_size: int = 64
+    batch_size: int = 32
     learning_rate: float = 5e-4
     epochs: int = 30
     seed: int = 42

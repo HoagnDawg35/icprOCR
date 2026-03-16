@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from src.models.heads import CTCHead
-from src.models.backbones import ResNetFeatureExtractor, ConvNeXtFeatureExtractor
-from src.models.necks import STNBlock, AttentionFusion, PositionalEncoding, BiFPNFusion, TemporalConvFusion, MultiHeadCA, ResBlock, Upsampler
+from src.models.backbones import ResNetFeatureExtractor, ConvNeXtFeatureExtractor, swinTransformer
+from src.models.necks import STNBlock, AttentionFusion, PositionalEncoding, BiFPNFusion, TemporalConvFusion, MultiHeadCA, ResBlock, Upsampler, FrameAttentionFusion
 # from src.models.model_sr import StackedSRNet
 
 class ResTranOCR(nn.Module):
@@ -34,16 +34,22 @@ class ResTranOCR(nn.Module):
             self.stn = STNBlock(in_channels=3)
 
         # 2. Backbone: ResNet34
-        self.backbone = ResNetFeatureExtractor(pretrained=False)
+        # self.backbone = ResNetFeatureExtractor(pretrained=False)
         # self.backbone = ConvNeXtFeatureExtractor(
         #     model_name='convnext_tiny',
         #     pretrained=False,
         # )
+        self.backbone = swinTransformer(pretrained=False)
         
         # 3. Attention Fusion
-        self.fusion = AttentionFusion(channels=self.cnn_channels)
+        # self.fusion = AttentionFusion(channels=self.cnn_channels) **
         # self.fusion = BiFPNFusion(channels=self.cnn_channels)
         # self.fusion = TemporalConvFusion(channels=self.cnn_channels)
+        self.fusion = FrameAttentionFusion(
+            channels=self.cnn_channels,
+            num_heads=8
+        )
+
         # 4. Transformer Encoder
         self.pos_encoder = PositionalEncoding(d_model=self.cnn_channels, dropout=dropout)
         
